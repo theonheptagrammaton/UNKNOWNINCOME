@@ -7,12 +7,12 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 ---
 
 ## Faz 0 — İskelet ve Altyapı
-- [~] **Kapsam:** Depo yapısı (§3.3), docker-compose (5 servis), FastAPI + Next.js merhaba-dünya, pytest + lint CI, `/api/health`.
+- [x] **Kapsam:** Depo yapısı (§3.3), docker-compose (5 servis), FastAPI + Next.js merhaba-dünya, pytest + lint CI, `/api/health`.
 - **Kabul kriterleri:**
-  - [ ] `docker compose up` ile tüm servisler ayakta
-  - [ ] `/api/health` 200 döner
-  - [ ] Testler yeşil (pytest + lint CI)
-- **Durum:** `[~]` Repo bootstrap edildi (git, .gitignore, .env.example, docs, README). Servis iskeleti bekliyor.
+  - [x] `docker compose up --build` ile 5 servisin tamamı ayakta ve **healthy** (postgres · redis · api · worker · frontend)
+  - [x] `/api/health` 200 döner (version + git sha)
+  - [x] Testler yeşil: pytest 2/2, ruff temiz, eslint temiz, `next build` başarılı; GitHub Actions CI (lint + test) tanımlı
+- **Durum:** `[x]` Tamamlandı (2026-07-17). Kanıt: `docker compose up --build` → 5/5 healthy; `/api/health`→200; `/backtest` & `/trade`→200 (kendine özgü içerikle render); worker sağlığı Redis heartbeat ile doğrulandı. Not: worker healthcheck deseni = Redis heartbeat; api/frontend healthcheck'leri IPv4 (`127.0.0.1`) kullanır (konteyner-içi IPv6 `localhost` çözümü sorunundan kaçınmak için).
 
 ## Faz 1 — Veri Katmanı
 - [ ] **Kapsam:** ccxt/Binance USDT-M OHLCV + funding indirici, Parquet store + DuckDB, gap tespit/onarım, sync cron, `candle_sync_state`, dinamik evren + tarihli snapshot (§4.5).
