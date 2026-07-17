@@ -1,0 +1,68 @@
+# ─── Secrets & environment ──────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Market data & artifacts (never versioned) ──────────────────────
+/data/
+*.parquet
+*.duckdb
+*.db
+*.sqlite
+*.sqlite3
+KILLSWITCH
+
+# ─── Python ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+
+# ─── Node / Next.js ─────────────────────────────────────────────────
+node_modules/
+.pnp.*
+.yarn/*
+.next/
+out/
+build/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS / Editor ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*~
+
+# ─── Logs & temp ────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+.cache/
