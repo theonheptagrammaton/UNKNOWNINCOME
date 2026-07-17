@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/*
+ * Silent Luxury — design tokens (doc §10).
+ * Black/graphite surfaces, dense negative space, grotesk type.
+ * Colour is used only when it carries meaning (P&L, mode, alerts).
+ */
+@theme {
+  /* Surfaces */
+  --color-void: #08090a;
+  --color-graphite: #141518;
+  --color-graphite-2: #1c1e22;
+  --color-line: #26282d;
+
+  /* Text */
+  --color-fog: #e7e9ea;
+  --color-fog-muted: #9a9ea6;
+  --color-fog-faint: #61656c;
+
+  /* Semantic — meaning only */
+  --color-profit: #3fb57f;
+  --color-loss: #e5484d;
+  --color-live: #3fb57f;
+  --color-paper: #d9a441;
+  --color-off: #61656c;
+
+  /* Type — grotesk system stack (self-hosted grotesk can replace this later) */
+  --font-sans: "Inter", "Helvetica Neue", "Segoe UI", Arial, system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--color-void);
+  color: var(--color-fog);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
