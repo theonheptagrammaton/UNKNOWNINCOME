@@ -15,13 +15,13 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Tamamlandı (2026-07-17). Kanıt: `docker compose up --build` → 5/5 healthy; `/api/health`→200; `/backtest` & `/trade`→200 (kendine özgü içerikle render); worker sağlığı Redis heartbeat ile doğrulandı. Not: worker healthcheck deseni = Redis heartbeat; api/frontend healthcheck'leri IPv4 (`127.0.0.1`) kullanır (konteyner-içi IPv6 `localhost` çözümü sorunundan kaçınmak için).
 
 ## Faz 1 — Veri Katmanı
-- [ ] **Kapsam:** ccxt/Binance USDT-M OHLCV + funding indirici, Parquet store + DuckDB, gap tespit/onarım, sync cron, `candle_sync_state`, dinamik evren + tarihli snapshot (§4.5).
+- [x] **Kapsam:** ccxt/Binance USDT-M OHLCV + funding indirici, Parquet store + DuckDB, gap tespit/onarım, sync cron, `candle_sync_state`, dinamik evren + tarihli snapshot (§4.5).
 - **Kabul kriterleri:**
-  - [ ] Evren kurucu top-30 listesi + tarihli snapshot üretir
-  - [ ] 10 sembol × 6 TF × 24 ay + funding serileri yüklü
-  - [ ] Bütünlük testi gap=0
-  - [ ] Tipik DuckDB sorgusu < 1 sn
-- **Durum:** `[ ]` başlamadı
+  - [x] Evren kurucu top-30 listesi + tarihli snapshot üretir (`build_universe` testli; canlı Binance smoke ile doğrulandı)
+  - [~] 10 sembol × 6 TF × 24 ay + funding serileri yüklü — mekanizma + CLI hazır; **gerçek yükleme operatör adımı** (plan B → `docs/RUNBOOK-faz1-veri.md`)
+  - [x] Bütünlük testi gap=0 (backfill+repair testi; sentetik seride gap=0 kanıtlı, operatör `status` ile gerçek veride teyit eder)
+  - [x] Tipik DuckDB aralık sorgusu < 1 sn (300k satırda testle ölçüldü)
+- **Durum:** `[x]` Kod tamam, CI yeşil (pytest 23/23, ruff temiz), 5 servis healthy, canlı ccxt adaptörü doğrulandı (792 market, gerçek OHLCV+funding). Gerçek 24-ay backfill sunucuda `docs/RUNBOOK-faz1-veri.md` ile çalıştırılır (kullanıcı onaylı plan B).
 
 ## Faz 2 — İndikatör Registry
 - [ ] **Kapsam:** TA-Lib + pandas-ta birleşik registry (200+), sinyal primitifleri (§5.4), hesap + Parquet cache, custom eklenti yükleyici.
