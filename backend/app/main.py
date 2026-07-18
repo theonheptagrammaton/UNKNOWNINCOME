@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.core.config import settings
 from app.core.db import SessionLocal, init_models
+from app.core.logging import configure_logging
 from app.core.version import APP_VERSION
 from app.indicators.persistence import sync_indicator_defs
 
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application."""
+    configure_logging()
     app = FastAPI(title="UNKNOWNINCOME API", version=APP_VERSION, lifespan=lifespan)
 
     app.add_middleware(

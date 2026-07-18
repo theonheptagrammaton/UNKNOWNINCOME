@@ -34,7 +34,9 @@ async def heartbeat(ctx: dict[str, Any]) -> None:
 async def startup(ctx: dict[str, Any]) -> None:
     """Seed heartbeat and ensure the DB schema exists."""
     from app.core.db import init_models
+    from app.core.logging import configure_logging
 
+    configure_logging()
     await heartbeat(ctx)
     await init_models()
 
