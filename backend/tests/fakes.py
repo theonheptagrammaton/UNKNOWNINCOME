@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from app.data.adapters.base import MarketDataAdapter, MarketInfo
 from app.data.timeframes import tf_to_ms
 
@@ -13,6 +15,24 @@ def make_ohlcv(start_ts: int, count: int, tf: str, base_price: float = 100.0) ->
     for i in range(count):
         price = base_price + i
         bars.append([start_ts + i * step, price, price + 1, price - 1, price + 0.5, 10.0 + i])
+    return bars
+
+
+def make_wave_ohlcv(
+    count: int, tf: str = "1h", seed: int = 42, base_price: float = 100.0
+) -> list[list[float]]:
+    """Deterministic random-walk OHLCV with genuine H/L/V variation (for indicators)."""
+    step = tf_to_ms(tf)
+    rng = np.random.default_rng(seed)
+    close = base_price + np.cumsum(rng.standard_normal(count))
+    bars: list[list[float]] = []
+    for i in range(count):
+        c = float(close[i])
+        o = c + float(rng.standard_normal()) * 0.2
+        h = max(o, c) + abs(float(rng.standard_normal()))
+        low = min(o, c) - abs(float(rng.standard_normal()))
+        v = float(rng.random()) * 1000 + 100
+        bars.append([i * step, o, h, low, c, v])
     return bars
 
 

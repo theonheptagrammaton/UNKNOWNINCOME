@@ -24,12 +24,18 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Kod tamam, CI yeşil (pytest 23/23, ruff temiz), 5 servis healthy, canlı ccxt adaptörü doğrulandı (792 market, gerçek OHLCV+funding). Gerçek 24-ay backfill sunucuda `docs/RUNBOOK-faz1-veri.md` ile çalıştırılır (kullanıcı onaylı plan B).
 
 ## Faz 2 — İndikatör Registry
-- [ ] **Kapsam:** TA-Lib + pandas-ta birleşik registry (200+), sinyal primitifleri (§5.4), hesap + Parquet cache, custom eklenti yükleyici.
+- [x] **Kapsam:** TA-Lib + pandas-ta birleşik registry (**225 benzersiz indikatör**), sinyal primitifleri (§5.4), hesap + Parquet cache, custom eklenti yükleyici.
 - **Kabul kriterleri:**
-  - [ ] Tüm indikatörler örnek sembolde hatasız hesaplanır
-  - [ ] ≥ 10 çekirdek indikatör bilinen referans değerlerle birim testinden geçer
-  - [ ] Cache isabeti loglanır
-- **Durum:** `[ ]` başlamadı
+  - [x] Tüm indikatörler örnek sembolde hatasız hesaplanır — toplu smoke test 225/225 (`test_indicators_smoke.py`)
+  - [x] ≥ 10 çekirdek indikatör bilinen referans değerlerle birim testinden geçer — 11 talib (SMA/EMA/WMA/RSI/ATR/ROC/MOM/WILLR/OBV/STDDEV/BBANDS) + custom zscore, bağımsız numpy/pandas referansına karşı (`test_indicators_reference.py`)
+  - [x] Cache isabeti loglanır — MISS→dosya yazımı, ikinci hesap HIT (kaynak dispatcher çağrılmaz), yeni bar cache'i bozar (`test_indicator_cache.py`)
+- **Ek teslimler:**
+  - Metadata şeması §5.3 (`IndicatorDef`: kategori, kaynak, inputs, param aralıkları, outputs, signal_templates) → `indicator_defs` tablosuna idempotent sync (uygulama lifespan'inde).
+  - Sinyal primitifleri §5.4 (threshold_cross · line_cross · slope · band_touch · regime · pattern) — hepsi bar-kapanışı esaslı; lookahead-güvenliği gelecekteki barları değiştirip geçmişin sabit kaldığı property testiyle kanıtlı.
+  - Cache anahtarı `(market, symbol, tf, indicator_id, params_hash)`; `_indicators/…parquet`; tazelik cached-vs-current bar kapsamıyla otomatik.
+  - Custom eklenti yükleyici (`indicators/custom/`, auto-register) + örnek `zscore` indikatörü.
+  - API: `GET /api/indicators` (kategori/kaynak filtresi) · `GET /api/indicators/{id}` (404) · `POST /api/indicators/compute` (önizleme, satır-kapaklı).
+- **Durum:** `[x]` Tamamlandı (2026-07-18). Kanıt: pytest **66/66** yeşil (43 yeni), ruff temiz. TA-Lib 0.7.1 (prebuilt wheel, sistem C-lib gerekmez) + pandas-ta 0.4.71b0 (pandas 3.0 uyumlu fork). Kaynak dağılımı: talib=134, pandas_ta=90, custom=1. Not: pandas-ta `numba` çekerek numpy 2.5.1→2.2.6 sabitler; Faz 1 testleri etkilenmedi.
 
 ## Faz 3 — Backtest Çekirdeği + Backtest Lab v1 (manuel mod)
 - [ ] **Kapsam:** vectorbt sarmalayıcı, maliyet modeli, tam metrik seti, `backtest_runs`; UI: manuel kurucu, koşu detayı (equity, DD, işlem listesi, mum+işaretler).

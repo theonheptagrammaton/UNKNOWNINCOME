@@ -10,14 +10,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.core.config import settings
-from app.core.db import init_models
+from app.core.db import SessionLocal, init_models
 from app.core.version import APP_VERSION
+from app.indicators.persistence import sync_indicator_defs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Create DB schema on startup (tolerant if the DB is unreachable)."""
+    """Create schema and sync the indicator registry (tolerant if DB is down)."""
     await init_models()
+    try:
+        async with SessionLocal() as session:
+            await sync_indicator_defs(session)
+    except Exception as exc:  # pragma: no cover - startup resilience
+        import logging
+
+        logging.getLogger(__name__).warning("indicator_defs sync skipped: %s", exc)
     yield
 
 

@@ -16,6 +16,10 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=18.0",
     "duckdb>=1.1",
+    # Phase 2 — indicator registry. TA-Lib ships prebuilt wheels (bundled C lib);
+    # pandas-ta 0.4.x is the maintained fork compatible with pandas 2.2+/3.0.
+    "ta-lib>=0.6",
+    "pandas-ta==0.4.71b0",
 ]
 
 [project.optional-dependencies]
