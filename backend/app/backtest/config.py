@@ -72,6 +72,25 @@ class CapitalConfig(BaseModel):
     leverage: float = 1.0
 
 
+class RiskExitConfig(BaseModel):
+    """Volatility-based stop/target exits (doc §7 Aşama 3, §8.1 genome `exit`).
+
+    Off by default (both multipliers ``None``) so every Phase-3 config behaves
+    unchanged. When set, the ATR-at-entry defines a fixed stop/target band; the
+    engine evaluates it at bar *close* and fills at the next open — lookahead-safe
+    exactly like the signal path (rule #1). The discovery pipeline's "exit/risk"
+    role wires these in.
+    """
+
+    atr_stop_mult: float | None = None  # stop distance = mult × ATR(entry)
+    atr_target_mult: float | None = None  # target distance = mult × ATR(entry)
+    atr_length: int = 14
+
+    @property
+    def enabled(self) -> bool:
+        return self.atr_stop_mult is not None or self.atr_target_mult is not None
+
+
 class RunConfig(BaseModel):
     """A complete, reproducible backtest request."""
 
@@ -85,6 +104,7 @@ class RunConfig(BaseModel):
     rules: Rules = Field(default_factory=Rules)
     costs: CostConfig = Field(default_factory=CostConfig)
     capital: CapitalConfig = Field(default_factory=CapitalConfig)
+    risk_exit: RiskExitConfig = Field(default_factory=RiskExitConfig)
     seed: int = 42
 
 

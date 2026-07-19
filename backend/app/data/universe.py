@@ -204,3 +204,25 @@ async def latest_universe_symbols(session: AsyncSession, market: str) -> list[st
     )
     snapshot = (await session.execute(stmt)).scalar_one_or_none()
     return list(snapshot.symbols) if snapshot else []
+
+
+async def universe_symbols_as_of(
+    session: AsyncSession, market: str, as_of: date
+) -> list[str]:
+    """Symbols from the most recent snapshot **on or before** ``as_of``.
+
+    The survivorship-bias guard (doc §4.5): a backtest dated in the past must use
+    the universe that was valid then — never today's winners list. Falls back to an
+    empty list if no snapshot predates ``as_of``.
+    """
+    stmt = (
+        select(UniverseSnapshot)
+        .where(
+            UniverseSnapshot.market == market,
+            UniverseSnapshot.as_of_date <= as_of,
+        )
+        .order_by(UniverseSnapshot.as_of_date.desc())
+        .limit(1)
+    )
+    snapshot = (await session.execute(stmt)).scalar_one_or_none()
+    return list(snapshot.symbols) if snapshot else []

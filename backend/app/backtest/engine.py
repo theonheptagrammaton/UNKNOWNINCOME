@@ -24,7 +24,7 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-from app.backtest.config import CapitalConfig, CostConfig
+from app.backtest.config import CapitalConfig, CostConfig, RiskExitConfig
 
 
 @dataclass
@@ -74,6 +74,7 @@ class Engine(Protocol):
         costs: CostConfig,
         capital: CapitalConfig,
         funding: pd.DataFrame | None = None,
+        risk_exit: RiskExitConfig | None = None,
     ) -> BacktestResult: ...
 
 
@@ -119,6 +120,7 @@ def run_engine(
     costs: CostConfig,
     capital: CapitalConfig,
     funding: pd.DataFrame | None = None,
+    risk_exit: RiskExitConfig | None = None,
 ) -> BacktestResult:
     """Simulate positions → equity → trades with the full §6.2 cost model."""
     n = len(ohlcv)
@@ -141,6 +143,13 @@ def run_engine(
         else np.zeros(n)
     )
     fund_bar = _funding_per_bar(ts, funding) if costs.funding_enabled else np.zeros(n)
+
+    # Volatility stop/target (doc §7 Aşama 3). ATR-at-signal fixes the band at entry;
+    # the trigger is evaluated at bar close and filled at the next open (rule #1).
+    risk_on = risk_exit is not None and risk_exit.enabled
+    atr_risk = _atr(high, low, close, risk_exit.atr_length) if risk_on else np.zeros(n)
+    stop_level = np.nan  # active-position stop price (NaN = none)
+    target_level = np.nan  # active-position target price
 
     equity = np.empty(n)
     position = np.zeros(n, dtype="int64")
@@ -170,6 +179,7 @@ def run_engine(
 
     def close_position(exit_ref: float, i: int, s: int, forced: bool) -> None:
         nonlocal cash, pos, qty, trade_funding, tot_commission, tot_slippage
+        nonlocal stop_level, target_level
         is_buy = pos < 0  # buy to cover a short
         if forced:
             exit_fill, slip = exit_ref, 0.0
@@ -207,10 +217,13 @@ def run_engine(
         tot_slippage += slip
         pos = 0
         qty = 0.0
+        stop_level = np.nan
+        target_level = np.nan
 
     def open_position(side: int, entry_ref: float, i: int, s: int) -> None:
         nonlocal cash, pos, qty, entry_fill, entry_ts, entry_index
         nonlocal entry_commission, entry_slip, trade_funding, tot_commission, tot_slippage
+        nonlocal stop_level, target_level
         avail = cash  # flat ⇒ equity == cash
         if avail <= 0:
             return
@@ -229,6 +242,16 @@ def run_engine(
         trade_funding = 0.0
         tot_commission += entry_commission
         tot_slippage += slip
+        # Fix the stop/target band from the ATR known at the entry *signal* bar s.
+        stop_level = np.nan
+        target_level = np.nan
+        if risk_on:
+            a = atr_risk[s]
+            if not np.isnan(a):
+                if risk_exit.atr_stop_mult is not None:
+                    stop_level = fill - side * risk_exit.atr_stop_mult * a
+                if risk_exit.atr_target_mult is not None:
+                    target_level = fill + side * risk_exit.atr_target_mult * a
 
     for i in range(n):
         pos_start = pos
@@ -242,10 +265,16 @@ def run_engine(
         if i >= 1:
             s = i - 1
             op = open_[i]
+            # Risk stop/target hit at bar s's close (fills next open, like a signal).
+            c_s = close[s]
+            risk_hit = risk_on and pos != 0 and (
+                (not np.isnan(stop_level) and pos * (c_s - stop_level) <= 0)
+                or (not np.isnan(target_level) and pos * (c_s - target_level) >= 0)
+            )
             # Exits first (allows a same-bar reversal).
-            if pos == 1 and (lx[s] or se[s]):
+            if pos == 1 and (lx[s] or se[s] or risk_hit):
                 close_position(op, i, s, forced=False)
-            elif pos == -1 and (sx[s] or le[s]):
+            elif pos == -1 and (sx[s] or le[s] or risk_hit):
                 close_position(op, i, s, forced=False)
             # Entries only if flat.
             if pos == 0:

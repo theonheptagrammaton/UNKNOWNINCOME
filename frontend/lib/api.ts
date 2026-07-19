@@ -50,6 +50,12 @@ export interface CapitalConfig {
   leverage: number;
 }
 
+export interface RiskExitConfig {
+  atr_stop_mult: number | null;
+  atr_target_mult: number | null;
+  atr_length: number;
+}
+
 export interface RunConfig {
   market: string;
   symbol: string;
@@ -61,6 +67,7 @@ export interface RunConfig {
   rules: Rules;
   costs: CostConfig;
   capital: CapitalConfig;
+  risk_exit?: RiskExitConfig;
   seed: number;
 }
 
@@ -243,4 +250,147 @@ export async function fetchRun(
   return getJSON<RunDetail>(
     `/backtest/runs/${id}?include_report=${includeReport}`,
   );
+}
+
+// ── Discovery (doc §7, §12) ──────────────────────────────────────────────────
+export interface ScanConfigInput {
+  market: string;
+  symbols: string[] | null;
+  universe_as_of?: string | null;
+  timeframes: string[];
+  direction: Direction;
+  top_n_combos: number;
+  optuna_trials: number;
+  fast_mode: boolean;
+  seed: number;
+  costs?: Partial<CostConfig>;
+}
+
+export interface ComboRef {
+  trigger: string;
+  filter: string;
+  exit: string;
+  symbol: string;
+  tf: string;
+}
+
+export interface LeaderboardRow {
+  rank?: number;
+  combo: ComboRef;
+  symbol: string;
+  tf: string;
+  oos_score: number | null;
+  status: string;
+  net_return: number | null;
+  sharpe: number | null;
+  max_drawdown: number | null;
+  profit_factor: number | null;
+  win_rate: number | null;
+  num_trades: number | null;
+  composite_score: number | null;
+  alarms: number;
+  scan_id?: string;
+}
+
+export interface ScanSummary {
+  combos_tried: number;
+  num_candidates: number;
+  num_alarms: number;
+  universe: string[];
+  stage_timings: Record<string, number>;
+  rows: LeaderboardRow[];
+}
+
+export interface WfoLayer {
+  train_start: number;
+  train_end: number;
+  test_start: number;
+  test_end: number;
+  composite_score: number;
+  net_return: number | null;
+  num_trades: number;
+}
+
+export interface AlarmRow {
+  combo_key: string;
+  engine: string;
+  metric: string;
+  primary: number;
+  finalist: number;
+  rel_diff: number;
+  tolerance: number;
+}
+
+export interface LeaderboardEntry {
+  rank?: number;
+  combo: ComboRef;
+  genome: RunConfig;
+  symbol: string;
+  tf: string;
+  oos_score: number | null;
+  is_score: number | null;
+  metrics: Metrics | null;
+  wfo_layers: WfoLayer[];
+  monte_carlo: { p95_max_drawdown: number; mean_max_drawdown: number; runs: number };
+  plateau_ok: boolean;
+  survived: boolean;
+  status: string;
+  alarms: AlarmRow[];
+  finalist?: { engine: string; net_return: number; num_trades: number; sharpe: number };
+}
+
+export interface ScanDetailPayload {
+  combos_tried: number;
+  num_candidates: number;
+  num_alarms: number;
+  universe: string[];
+  stage_timings: Record<string, number>;
+  alarms: AlarmRow[];
+  leaderboard: LeaderboardEntry[];
+}
+
+export interface ScanDetail {
+  id: string;
+  status: string;
+  stage: string | null;
+  progress: number;
+  combos_tried: number;
+  config: Record<string, unknown>;
+  config_hash: string;
+  seed: number;
+  leaderboard: ScanSummary | null;
+  detail: ScanDetailPayload | null;
+  error: string | null;
+  created_at: string | null;
+}
+
+export async function postScan(
+  config: ScanConfigInput,
+): Promise<{ scan_id: string; status: string; config_hash: string }> {
+  const res = await fetch(`${API_BASE}/discovery/scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`scan failed → ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+export async function fetchScan(
+  id: string,
+  includeDetail = false,
+): Promise<ScanDetail> {
+  return getJSON<ScanDetail>(
+    `/discovery/scans/${id}?include_detail=${includeDetail}`,
+  );
+}
+
+export async function fetchLeaderboard(
+  sortBy = "oos_score",
+  limit = 50,
+): Promise<{ count: number; sort_by: string; rows: LeaderboardRow[] }> {
+  return getJSON(`/discovery/leaderboard?sort_by=${sortBy}&limit=${limit}`);
 }

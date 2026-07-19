@@ -20,6 +20,8 @@ dependencies = [
     # pandas-ta 0.4.x is the maintained fork compatible with pandas 2.2+/3.0.
     "ta-lib>=0.6",
     "pandas-ta==0.4.71b0",
+    # Phase 4 — discovery. Optuna drives the Stage-4 parameter search (TPE).
+    "optuna>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +31,12 @@ dev = [
     "httpx>=0.28",
     "ruff>=0.8",
     "aiosqlite>=0.20",
+]
+# Phase 4 — finalist cross-validation engine (doc §6.1). Optional: the discovery
+# pipeline uses an independent lean "second-opinion" verifier as a fallback when
+# backtesting.py is unavailable, so core install + CI stay green without it.
+finalist = [
+    "backtesting>=0.3.3",
 ]
 
 [build-system]

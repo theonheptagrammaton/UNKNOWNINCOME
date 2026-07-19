@@ -54,12 +54,19 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Tamamlandı (2026-07-19). Kanıt: pytest **85/85** yeşil (19 yeni Faz-3 testi), ruff temiz, `next build` başarılı, tsc+eslint temiz. Motor kararı: doküman vectorbt diyor ama vectorbt 1.1.0 pandas 3.0.3 stack'inde ağır bağımlılık + numpy/numba yükseltmesi gerektiriyor ve runtime uyumu kanıtsız; bu yüzden Faz 3 için lean owned core seçildi (kullanıcı onaylı), vectorbt Faz 4 kütle taraması için `Engine` arayüzü arkasında takılabilir bırakıldı.
 
 ## Faz 4 — Otomatik Keşif Pipeline'ı
-- [ ] **Kapsam:** Aşama 0–6 (§7), Optuna entegrasyonu, WFO motoru (§6.5), liderlik tablosu UI, backtesting.py finalist doğrulaması.
+- [x] **Kapsam:** Aşama 0–6 (§7), Optuna entegrasyonu, WFO motoru (§6.5), liderlik tablosu UI, finalist çapraz doğrulaması (interface + fallback).
 - **Kabul kriterleri:**
-  - [ ] 10 sembol × 4 TF standart tarama < 2 saat
-  - [ ] Aynı seed → aynı sıralama (bit-for-bit)
-  - [ ] İki motor uyuşmazlığı alarm üretir
-- **Durum:** `[ ]` başlamadı
+  - [~] 10 sembol × 4 TF standart tarama < 2 saat — her aşama süre logu (`ScanResult.stage_timings`) mevcut; **gerçek 10×4 ölçümü operatör adımı** (24-ay backfill gerektirir, plan B). Hızlı mod uçtan uca ~8 sn'de biter (`test_discovery_pipeline`).
+  - [x] Aynı seed → aynı sıralama — `test_same_seed_same_leaderboard_ranking` (liderlik sırası + OOS skorları + combos_tried bit-for-bit); Optuna TPE seed'li, Monte Carlo seed'li, tüm sıralamalarda açık tiebreak.
+  - [x] İki motor uyuşmazlığı alarm üretir — `test_discovery_crosscheck` (uyuşma → alarm yok; sapma → alarm; ayrıca lean second-opinion motoru gerçek koşuda primary ile uyuşuyor → yanlış alarm yok).
+- **Ek teslimler:**
+  - Pipeline (`backend/app/discovery/`): tekli tarama (`candidates`) → korelasyon eleme |ρ|>0.85 (`correlation`) → rol tabanlı kombinasyon, kategori kısıtlı (`roles`+`combine`) → Optuna TPE (`optimize`) → WFO + parametre platosu + Monte Carlo (`wfo`) → liderlik (`leaderboard`). Orkestrasyon `pipeline.run_scan` (DB'den bağımsız, progress callback).
+  - Survivorship guard: `universe_symbols_as_of` (test tarihindeki ≤ snapshot); `test_discovery_survivorship`.
+  - Finalist §6.1: `FinalistEngine` arayüzü + backtesting.py adaptörü (opsiyonel `[finalist]` extra, lazy import) + bağımsız lean second-opinion motoru (her zaman mevcut fallback) + motor-agnostik alarm karşılaştırıcı (`crosscheck`).
+  - Motor eklentisi: `RiskExitConfig` (ATR stop/target, bar-kapanışı değerlendirme → sonraki açılış dolumu, lookahead-güvenli, varsayılan KAPALI → Faz 3 testleri etkilenmez); `test_engine_risk_exit` (el-hesabı long/short stop+target).
+  - `discovery_scans` tablosu (config+hash+seed+status+**stage+progress+combos_tried**+leaderboard+artifact). API §12: `POST /api/discovery/scan` · `GET /api/discovery/scans/{id}` (canlı ilerleme + opsiyonel tam artifact) · `GET /api/discovery/leaderboard` (çapraz-tarama, sıralanabilir). Worker: `run_discovery_job`. "Hızlı mod" (`fast_mode`) küçük evren/dönem/bütçe.
+  - UI (`/discovery`, auto mod): tarama kurucu (semboller/universe-as-of, TF çoklu seçim, yön, top-N, trials, fast-mode), canlı ilerleme (aşama + bar + combos_tried), **sıralanabilir liderlik tablosu** (combos_tried görünür), satır detayı (genome, WFO katmanları, Monte Carlo bandı, plato, finalist alarmları), **"Convert to strategy" disabled** (Faz 5). Nav linki eklendi.
+- **Durum:** `[x]` Tamamlandı (2026-07-20). Kanıt: pytest **109/109** yeşil (24 yeni Faz-4 testi), ruff temiz, `next build` başarılı (/discovery 5.54 kB), tsc+eslint temiz. Gerçek fast-mode tarama script'i uçtan uca liderlik üretti (12 kombinasyon, 6 finalist, WFO katmanları + MC bandı, 0 yanlış alarm, deterministik). Kararlar: (1) finalist motoru interface+fallback (backtesting.py Faz-3 vectorbt gibi pandas-3.0 stack riski taşıyor → opsiyonel extra + her zaman-mevcut lean second-opinion); (2) Stage 1 varsayılan tam 225 registry (rol taşıyan kategoriler). Gerçek 10×4 <2h ölçümü + canlı UI ekran görüntüsü operatör plan-B (RUNBOOK deseni).
 
 ## Faz 5 — Strateji Motoru + Paper Trading + Trade Deck
 - [ ] **Kapsam:** Genome + sürümleme (§8.1), üç katmanlı düzenleme (§8.6), paper doldurma simülatörü, risk katmanı (§9.4), mod şalteri (§9.6), kill switch (4 kanal), sinyal akışı + karar günlüğü UI, Telegram bildirim + komut seti (§10.3).

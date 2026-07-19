@@ -142,7 +142,9 @@ def run_backtest(config: RunConfig) -> dict:
             config.market, config.symbol, config.start_ts, config.end_ts
         )
 
-    result = run_engine(ohlcv, signals, config.costs, config.capital, funding)
+    result = run_engine(
+        ohlcv, signals, config.costs, config.capital, funding, config.risk_exit
+    )
     metrics = compute_metrics(result, config.tf)
     report = build_report(config, ohlcv, result)
     return {"metrics": _sanitize(metrics), "report": report}

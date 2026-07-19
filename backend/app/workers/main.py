@@ -88,6 +88,16 @@ async def run_backtest_job(ctx: dict[str, Any], run_id: str) -> dict[str, str]:
     return {"run_id": run_id}
 
 
+async def run_discovery_job(ctx: dict[str, Any], scan_id: str) -> dict[str, str]:
+    """Run a queued discovery scan (§7) and persist its leaderboard + artifact."""
+    from app.core.db import SessionLocal
+    from app.discovery.service import execute_scan
+
+    async with SessionLocal() as session:
+        await execute_scan(session, scan_id)
+    return {"scan_id": scan_id}
+
+
 async def incremental_sync(ctx: dict[str, Any]) -> None:
     """Cron: pull newly closed bars for the active universe (best-effort)."""
     from app.core.db import SessionLocal
@@ -141,7 +151,7 @@ class WorkerSettings:
 
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
-    functions = [sync_data_job, run_backtest_job]
+    functions = [sync_data_job, run_backtest_job, run_discovery_job]
     cron_jobs = [
         cron(heartbeat, second={0, 15, 30, 45}, run_at_startup=True),
         cron(incremental_sync, minute=set(range(0, 60, 5))),

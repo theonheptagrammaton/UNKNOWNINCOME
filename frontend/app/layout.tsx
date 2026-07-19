@@ -25,6 +25,9 @@ export default function RootLayout({
               <Link href="/backtest" className="transition-colors hover:text-fog">
                 Backtest Lab
               </Link>
+              <Link href="/discovery" className="transition-colors hover:text-fog">
+                Discovery
+              </Link>
               <Link href="/trade" className="transition-colors hover:text-fog">
                 Trade Deck
               </Link>
