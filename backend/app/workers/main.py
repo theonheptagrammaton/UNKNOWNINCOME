@@ -78,6 +78,16 @@ async def sync_data_job(
         await adapter.close()
 
 
+async def run_backtest_job(ctx: dict[str, Any], run_id: str) -> dict[str, str]:
+    """Run a queued backtest (§6) and persist its outcome + report artifact."""
+    from app.backtest.service import execute_backtest
+    from app.core.db import SessionLocal
+
+    async with SessionLocal() as session:
+        await execute_backtest(session, run_id)
+    return {"run_id": run_id}
+
+
 async def incremental_sync(ctx: dict[str, Any]) -> None:
     """Cron: pull newly closed bars for the active universe (best-effort)."""
     from app.core.db import SessionLocal
@@ -131,7 +141,7 @@ class WorkerSettings:
 
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
-    functions = [sync_data_job]
+    functions = [sync_data_job, run_backtest_job]
     cron_jobs = [
         cron(heartbeat, second={0, 15, 30, 45}, run_at_startup=True),
         cron(incremental_sync, minute=set(range(0, 60, 5))),

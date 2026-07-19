@@ -32,7 +32,7 @@ export default function RootLayout({
           </header>
           <main className="flex-1 py-12">{children}</main>
           <footer className="border-t border-line py-5 text-xs text-fog-faint">
-            Phase 0 — skeleton · UTC internally, Europe/Istanbul in UI
+            Phase 3 — Backtest Lab · UTC internally, Europe/Istanbul in UI
           </footer>
         </div>
       </body>

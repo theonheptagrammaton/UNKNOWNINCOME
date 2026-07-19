@@ -10,6 +10,7 @@ import duckdb
 import pandas as pd
 
 from app.data.parquet_store import dataset_path
+from app.data.timeframes import FUNDING_TF
 
 
 def query_ohlcv(
@@ -38,6 +39,38 @@ def query_ohlcv(
         "FROM read_parquet(?) "
         f"{where}ORDER BY ts"
     )
+    con = duckdb.connect()
+    try:
+        return con.execute(sql, params).df()
+    finally:
+        con.close()
+
+
+def query_funding(
+    market: str,
+    symbol: str,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+) -> pd.DataFrame:
+    """Return funding rows ``[ts, funding_rate]`` in ``[start_ts, end_ts]`` (inclusive).
+
+    Funding settles every 8h (doc §6.2); an absent file means no funding data
+    (an empty frame — the cost model then contributes zero funding).
+    """
+    path = dataset_path(market, symbol, FUNDING_TF)
+    if not path.exists():
+        return pd.DataFrame(columns=["ts", "funding_rate"])
+
+    conditions: list[str] = []
+    params: list[object] = [str(path)]
+    if start_ts is not None:
+        conditions.append("ts >= ?")
+        params.append(int(start_ts))
+    if end_ts is not None:
+        conditions.append("ts <= ?")
+        params.append(int(end_ts))
+    where = f"WHERE {' AND '.join(conditions)} " if conditions else ""
+    sql = f"SELECT ts, funding_rate FROM read_parquet(?) {where}ORDER BY ts"
     con = duckdb.connect()
     try:
         return con.execute(sql, params).df()

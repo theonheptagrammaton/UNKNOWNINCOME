@@ -38,12 +38,20 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Tamamlandı (2026-07-18). Kanıt: pytest **66/66** yeşil (43 yeni), ruff temiz. TA-Lib 0.7.1 (prebuilt wheel, sistem C-lib gerekmez) + pandas-ta 0.4.71b0 (pandas 3.0 uyumlu fork). Kaynak dağılımı: talib=134, pandas_ta=90, custom=1. Not: pandas-ta `numba` çekerek numpy 2.5.1→2.2.6 sabitler; Faz 1 testleri etkilenmedi.
 
 ## Faz 3 — Backtest Çekirdeği + Backtest Lab v1 (manuel mod)
-- [ ] **Kapsam:** vectorbt sarmalayıcı, maliyet modeli, tam metrik seti, `backtest_runs`; UI: manuel kurucu, koşu detayı (equity, DD, işlem listesi, mum+işaretler).
+- [x] **Kapsam:** lean backtest motoru (vectorbt-hazır `Engine` arayüzü arkasında), maliyet modeli, tam metrik seti, `backtest_runs`; UI: manuel kurucu, koşu detayı (equity, DD, işlem listesi, aylık ısı haritası, mum+işaretler).
 - **Kabul kriterleri:**
-  - [ ] EMA9×EMA21 referans stratejisi elle hesaplanmış sonuçla eşleşir
-  - [ ] Lookahead testi (sinyali 1 bar kaydırınca sonuç değişmeli) geçer
-  - [ ] UI'dan uçtan uca koşu yapılır
-- **Durum:** `[ ]` başlamadı
+  - [x] EMA9×EMA21 referans stratejisi elle hesaplanmış sonuçla eşleşir — bağımsız (from-scratch) simülatör motorla bit-for-bit uyuşur (`test_backtest_runner.py::test_ema_cross_matches_independent_simulator`, rel=1e-9) + literal el-hesabı işlem/komisyon/funding testleri (`test_backtest_engine.py`)
+  - [x] Lookahead testi (sinyali 1 bar kaydırınca sonuç değişmeli) geçer — `test_shifting_signal_by_one_bar_changes_result`; ayrıca sinyal primitifleri Faz 2'den bar-kapanışı property testli
+  - [x] Aynı config+seed → bit-for-bit aynı sonuç — `test_same_config_seed_bit_for_bit` (metrics+report JSON eşit); config_hash seed'e duyarlı
+  - [x] UI'dan uçtan uca koşu yapılır — canlı stack (api + arq worker + redis + Next) üzerinde sentetik BTCUSDT/1h ile: form → POST /run (202) → worker (done, 18 işlem) → GET report → rapor render (metrikler, mum+işaretler, equity/DD, aylık ısı haritası, işlem tablosu). Ekran görüntüsü kanıtlı.
+- **Ek teslimler:**
+  - Motor (`backtest/engine.py`): sinyal bar-kapanışında → dolum sonraki bar açılışında (rule #1); long+short; tek-barda reversal; açık pozisyon son barda mark-out.
+  - Maliyet modeli §6.2 (`backtest/costs` config): komisyon (4 bps taker/yön) + slippage (fixed 5 bps **veya** 0.05×ATR, seçilebilir) + **funding** (8h tarihsel; long öder / short alır) — hepsi varsayılan AÇIK, raporda ayrı kalem; kapalı olan bileşen "costless" kırmızı etiketiyle işaretlenir.
+  - Metrikler §6.3 tam set + §6.4 bileşik skor (tek-koşu için belgeli bounded normalizasyon; sert filtre bayrağı: işlem≥30 · MaxDD≤%25 · PF≥1). Aylık getiri ısı haritası dahil.
+  - API §12: `POST /api/backtest/run` (async arq, config_hash+seed ile `backtest_runs`) · `GET /api/backtest/runs/{id}` (metrics + disk artifact raporu). Worker: `run_backtest_job`.
+  - UI (`/backtest`): manuel kurucu (sembol/TF, kategorili+aranabilir indikatör seçici, param formu, §5.4 kural kurucu, maliyet/kapital ayarları) + koşu detayı (lightweight-charts mum+işaret, equity/DD, aylık ısı haritası, işlem tablosu, maliyet rozetleri). Zaman UI'da Europe/Istanbul.
+  - `app.data.cli devseed`: yerel/UI doğrulaması için SENTETİK OHLCV+funding üretici (gerçek 24-ay backfill operatör plan-B'de kalır).
+- **Durum:** `[x]` Tamamlandı (2026-07-19). Kanıt: pytest **85/85** yeşil (19 yeni Faz-3 testi), ruff temiz, `next build` başarılı, tsc+eslint temiz. Motor kararı: doküman vectorbt diyor ama vectorbt 1.1.0 pandas 3.0.3 stack'inde ağır bağımlılık + numpy/numba yükseltmesi gerektiriyor ve runtime uyumu kanıtsız; bu yüzden Faz 3 için lean owned core seçildi (kullanıcı onaylı), vectorbt Faz 4 kütle taraması için `Engine` arayüzü arkasında takılabilir bırakıldı.
 
 ## Faz 4 — Otomatik Keşif Pipeline'ı
 - [ ] **Kapsam:** Aşama 0–6 (§7), Optuna entegrasyonu, WFO motoru (§6.5), liderlik tablosu UI, backtesting.py finalist doğrulaması.
