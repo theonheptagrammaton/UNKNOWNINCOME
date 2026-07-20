@@ -4,9 +4,33 @@ from __future__ import annotations
 
 import numpy as np
 
-from app.discovery.wfo import Window, monte_carlo, rolling_windows
+from app.discovery.wfo import Window, evaluate_survival, monte_carlo, rolling_windows
 
 DAY = 86_400_000
+
+
+def _survives(**kw) -> bool:
+    base = dict(
+        oos_score=0.6, oos_mean_net=0.15, oos_trades=20, is_score=1.0,
+        plateau_ok=True, passes_hard_filters=True,
+        min_oos_is_ratio=0.5, min_oos_trades=10,
+    )
+    base.update(kw)
+    return evaluate_survival(**base)
+
+
+def test_survival_requires_genuine_oos() -> None:
+    # Baseline: profitable OOS, keeps ≥50% of the IS score, enough trades ⇒ survives.
+    assert _survives()
+    # Overfit: great in-sample (is_score=1.0) but the OOS score collapsed ⇒ rejected.
+    assert not _survives(oos_score=0.1)
+    # OOS not actually profitable ⇒ rejected (the old gate let oos_score>0 through).
+    assert not _survives(oos_mean_net=-0.01)
+    # Too few OOS trades ⇒ noise, not evidence ⇒ rejected.
+    assert not _survives(oos_trades=5)
+    # Plateau / hard-filter failures still veto.
+    assert not _survives(plateau_ok=False)
+    assert not _survives(passes_hard_filters=False)
 
 
 def test_rolling_windows_shape_and_step() -> None:

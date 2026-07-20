@@ -49,7 +49,15 @@ export function TradesTable({ trades }: { trades: Trade[] }) {
                 </td>
                 <td className="px-3 py-2 text-fog-muted">
                   {fmtDateTime(t.exit_ts)}
-                  {t.forced && (
+                  {t.liquidated && (
+                    <span
+                      className="ml-1 rounded bg-loss/15 px-1 text-[10px] uppercase text-loss"
+                      title="Force-closed at the isolated-margin liquidation price"
+                    >
+                      liq
+                    </span>
+                  )}
+                  {t.forced && !t.liquidated && (
                     <span className="ml-1 text-[10px] uppercase text-fog-faint">
                       eod
                     </span>

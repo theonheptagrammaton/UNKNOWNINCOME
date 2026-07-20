@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from app.core.clock import Clock, now_ms
 from app.execution.base import Balance, OrderRequest, OrderResult, Position
+from app.execution.sizing import position_size
 
 
 class RiskLimits(BaseModel):
@@ -62,6 +63,11 @@ class TradeIntent:
     signal_id: str | None = None
     commission_bps: float | None = None  # per-genome cost overrides (paper sim)
     slippage_bps: float | None = None
+    # Per-genome sizing (§8.1 risk block). None ⇒ fall back to the global RiskLimits,
+    # so sizing matches the backtest that validated this genome (shared model).
+    sizing: str | None = None  # "atr" | "fixed"
+    per_trade_pct: float | None = None
+    size_pct: float | None = None  # fixed-mode fraction
 
     @property
     def is_open(self) -> bool:
@@ -290,18 +296,25 @@ class RiskLayer:
         return None
 
     def _size(self, equity: float, intent: TradeIntent, leverage: float) -> float:
-        """ATR-risk sizing capped by available margin; fixed fallback."""
-        price = intent.reference_price
-        if price <= 0 or equity <= 0:
-            return 0.0
-        margin_cap_qty = (equity * leverage) / price  # notional ≤ equity × leverage
-        stop = self._stop_distance(intent)
-        if self.limits.sizing == "atr" and stop:
-            risk_amount = equity * self.limits.per_trade_pct / 100.0
-            qty = risk_amount / stop
-            return min(qty, margin_cap_qty)
-        # Fixed fallback: deploy per_trade_pct of equity as margin, levered.
-        return (equity * self.limits.per_trade_pct / 100.0 * leverage) / price
+        """Position size via the shared model (:mod:`app.execution.sizing`).
+
+        The genome's sizing (carried on the intent) wins over the global limits, so a
+        paper/live order is sized exactly like the backtest that validated the genome.
+        """
+        sizing = intent.sizing or self.limits.sizing
+        per_trade = (
+            intent.per_trade_pct if intent.per_trade_pct is not None
+            else self.limits.per_trade_pct
+        )
+        return position_size(
+            equity=equity,
+            price=intent.reference_price,
+            leverage=leverage,
+            sizing=sizing,
+            per_trade_pct=per_trade,
+            stop_distance=self._stop_distance(intent),
+            fixed_fraction=intent.size_pct if intent.size_pct is not None else 1.0,
+        )
 
     def _close_qty(self, intent: TradeIntent) -> float:
         for p in self.__adapter.get_positions():

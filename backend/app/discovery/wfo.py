@@ -60,6 +60,37 @@ class WFOReport:
     monte_carlo: dict
     full_metrics: dict = field(default_factory=dict)
     survived: bool = False
+    oos_mean_net_return: float = 0.0
+    oos_trades: int = 0
+
+
+def evaluate_survival(
+    *,
+    oos_score: float,
+    oos_mean_net: float,
+    oos_trades: int,
+    is_score: float,
+    plateau_ok: bool,
+    passes_hard_filters: bool,
+    min_oos_is_ratio: float,
+    min_oos_trades: int,
+) -> bool:
+    """§6.5 survival verdict — a *genuine* OOS bar, not the old ``oos_score > 0``.
+
+    The out-of-sample folds must be profitable on average, keep a real fraction of the
+    in-sample score (so a strategy that only shines in-sample is rejected), carry enough
+    OOS trades to be evidence rather than noise, and clear the plateau + hard filters.
+    """
+    oos_is_ok = (
+        oos_score >= min_oos_is_ratio * is_score if is_score > 0 else oos_score > 0.0
+    )
+    return bool(
+        plateau_ok
+        and passes_hard_filters
+        and oos_mean_net > 0.0
+        and oos_trades >= min_oos_trades
+        and oos_is_ok
+    )
 
 
 def monte_carlo(trade_returns: np.ndarray, runs: int, seed: int) -> dict:
@@ -157,6 +188,9 @@ def walk_forward(combo: Combo, config: ScanConfig, opt: OptimizeResult) -> WFORe
 
     oos_scores = [x["composite_score"] for x in layers]
     oos_score = float(np.mean(oos_scores)) if oos_scores else 0.0
+    oos_nets = [x["net_return"] for x in layers if x.get("net_return") is not None]
+    oos_mean_net = float(np.mean(oos_nets)) if oos_nets else 0.0
+    oos_trades = int(sum(x.get("num_trades", 0) for x in layers))
 
     # Full-period eval: leaderboard metrics + the trade set for Monte-Carlo.
     full_score, full_metrics, trade_rets = _eval_full(
@@ -165,15 +199,21 @@ def walk_forward(combo: Combo, config: ScanConfig, opt: OptimizeResult) -> WFORe
     plateau_ok, plateau_scores = parameter_plateau(combo, config, opt, full_score)
     mc = monte_carlo(trade_rets, config.monte_carlo_runs, config.seed)
 
-    survived = (
-        oos_score > 0.0
-        and plateau_ok
-        and bool(full_metrics.get("passes_hard_filters", False))
+    # §6.5 survival — a genuine OOS bar (see evaluate_survival), not "oos_score > 0".
+    survived = evaluate_survival(
+        oos_score=oos_score,
+        oos_mean_net=oos_mean_net,
+        oos_trades=oos_trades,
+        is_score=float(opt.best_score or 0.0),
+        plateau_ok=plateau_ok,
+        passes_hard_filters=bool(full_metrics.get("passes_hard_filters", False)),
+        min_oos_is_ratio=config.wfo.min_oos_is_ratio,
+        min_oos_trades=config.wfo.min_oos_trades,
     )
     return WFOReport(
         oos_score=oos_score, layers=layers, plateau_ok=plateau_ok,
         plateau_scores=plateau_scores, monte_carlo=mc, full_metrics=full_metrics,
-        survived=survived,
+        survived=survived, oos_mean_net_return=oos_mean_net, oos_trades=oos_trades,
     )
 
 

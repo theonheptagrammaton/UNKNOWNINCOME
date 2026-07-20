@@ -45,12 +45,22 @@ class CandidateSelection(BaseModel):
 
 
 class WFOConfig(BaseModel):
-    """Walk-forward windows (doc §6.5 point 2). Days are wall-clock, not bars."""
+    """Walk-forward windows (doc §6.5). Days are wall-clock, not bars.
+
+    ``reoptimize`` defaults **on** (doc §6.5.1 "nihai skor OOS'tan gelir"): each fold
+    re-runs Optuna on its own train window, so the test-window score is genuinely
+    out-of-sample. With it off the same full-range params are scored on windows that
+    were part of the fit — an optimistic, contaminated "OOS".
+    """
 
     train_days: int = 90
     test_days: int = 30
     step_days: int = 30
-    reoptimize: bool = False  # re-run Optuna on each train fold (heavier)
+    reoptimize: bool = True  # re-run Optuna on each train fold ⇒ genuine OOS
+    # Survival thresholds (doc §6.5): OOS must stay a real fraction of the in-sample
+    # score and carry enough out-of-sample trades to be evidence, not noise.
+    min_oos_is_ratio: float = 0.5
+    min_oos_trades: int = 10
 
 
 class PlateauConfig(BaseModel):

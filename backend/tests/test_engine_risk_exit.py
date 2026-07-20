@@ -46,7 +46,9 @@ def _no_costs() -> CostConfig:
 
 
 def _cap(cash: float = 1100.0) -> CapitalConfig:
-    return CapitalConfig(initial_cash=cash, size_pct=1.0, leverage=1.0)
+    # Fixed sizing keeps qty a clean 10 so the stop/target exits are hand-checkable;
+    # ATR-risk sizing (the new default) is exercised in test_sizing.py.
+    return CapitalConfig(initial_cash=cash, sizing="fixed", size_pct=1.0, leverage=1.0)
 
 
 def test_long_atr_target_exit_hand_computed() -> None:

@@ -48,7 +48,18 @@ export function defaultConfig(symbol = "BTCUSDT", tf = "1h"): RunConfig {
       atr_length: 14,
       funding_enabled: true,
     },
-    capital: { initial_cash: 10000, size_pct: 1.0, leverage: 1.0 },
+    // Defaults mirror the live risk wall so a backtest ≈ what the bot will actually
+    // do: risk 1% of equity to a 2×ATR stop, 5× leverage (doc §8.1, §9.4, §16 #4).
+    capital: {
+      initial_cash: 10000,
+      sizing: "atr",
+      per_trade_pct: 1.0,
+      default_stop_atr_mult: 2.0,
+      maintenance_margin_rate: 0.005,
+      size_pct: 1.0,
+      leverage: 5.0,
+    },
+    risk_exit: { atr_stop_mult: 2.0, atr_target_mult: 3.0, atr_length: 14 },
     seed: 42,
   };
 }

@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.config import CapitalConfig, CostConfig, RiskExitConfig
+from app.execution.sizing import liquidation_price, position_size
 
 
 @dataclass
@@ -47,6 +48,7 @@ class Trade:
     net_pnl: float  # gross − commission + funding
     return_pct: float  # net_pnl / entry notional
     forced: bool  # marked out at final bar (no exit costs)
+    liquidated: bool = False  # force-closed at the isolated-margin liquidation price
 
 
 @dataclass
@@ -144,12 +146,25 @@ def run_engine(
     )
     fund_bar = _funding_per_bar(ts, funding) if costs.funding_enabled else np.zeros(n)
 
-    # Volatility stop/target (doc §7 Aşama 3). ATR-at-signal fixes the band at entry;
-    # the trigger is evaluated at bar close and filled at the next open (rule #1).
+    # Volatility stop/target (doc §7 Aşama 3) + ATR position sizing (§16 #4). One ATR
+    # series drives both: the ATR-at-signal fixes the stop band at entry, and the same
+    # stop distance sizes the position, so an ATR-sized trade always carries a real
+    # stop (the trigger is evaluated at bar close and filled at the next open, rule #1).
     risk_on = risk_exit is not None and risk_exit.enabled
-    atr_risk = _atr(high, low, close, risk_exit.atr_length) if risk_on else np.zeros(n)
+    atr_sizing = capital.sizing == "atr"
+    stop_atr_len = risk_exit.atr_length if risk_exit is not None else 14
+    atr_stop = _atr(high, low, close, stop_atr_len) if (risk_on or atr_sizing) else np.zeros(n)
+    # Effective stop multiplier: the exit's own stop when set, else the sizing default.
+    if risk_on and risk_exit.atr_stop_mult is not None:
+        eff_stop_mult: float | None = risk_exit.atr_stop_mult
+    elif atr_sizing:
+        eff_stop_mult = capital.default_stop_atr_mult
+    else:
+        eff_stop_mult = None
+    target_mult = risk_exit.atr_target_mult if risk_on else None
     stop_level = np.nan  # active-position stop price (NaN = none)
     target_level = np.nan  # active-position target price
+    liq_level = np.nan  # active-position liquidation price (NaN = none)
 
     equity = np.empty(n)
     position = np.zeros(n, dtype="int64")
@@ -177,11 +192,15 @@ def run_engine(
             d = ref_open * slip_bps
         return (ref_open + d, d) if is_buy else (ref_open - d, d)
 
-    def close_position(exit_ref: float, i: int, s: int, forced: bool) -> None:
+    def close_position(
+        exit_ref: float, i: int, s: int, forced: bool, liquidated: bool = False
+    ) -> None:
         nonlocal cash, pos, qty, trade_funding, tot_commission, tot_slippage
-        nonlocal stop_level, target_level
+        nonlocal stop_level, target_level, liq_level
         is_buy = pos < 0  # buy to cover a short
-        if forced:
+        # A forced markout (final bar) and a liquidation both fill at the given price
+        # with no exit slippage/commission — a liquidation *is* the margin wipe-out.
+        if forced or liquidated:
             exit_fill, slip = exit_ref, 0.0
             exit_commission = 0.0
         else:
@@ -210,6 +229,7 @@ def run_engine(
                 net_pnl=float(net),
                 return_pct=float(net / notional) if notional else 0.0,
                 forced=forced,
+                liquidated=liquidated,
             )
         )
         # Entry portions were counted in open_position; add only the exit side here.
@@ -219,11 +239,12 @@ def run_engine(
         qty = 0.0
         stop_level = np.nan
         target_level = np.nan
+        liq_level = np.nan
 
     def open_position(side: int, entry_ref: float, i: int, s: int) -> None:
         nonlocal cash, pos, qty, entry_fill, entry_ts, entry_index
         nonlocal entry_commission, entry_slip, trade_funding, tot_commission, tot_slippage
-        nonlocal stop_level, target_level
+        nonlocal stop_level, target_level, liq_level
         avail = cash  # flat ⇒ equity == cash
         if avail <= 0:
             return
@@ -231,7 +252,25 @@ def run_engine(
         fill, slip = fill_price(entry_ref, is_buy, s)
         if fill <= 0:
             return
-        qty = (avail * capital.size_pct * capital.leverage) / fill
+        # Stop distance from the ATR known at the entry *signal* bar s — the sizing
+        # basis *and* the exit band (identical to the live RiskLayer, so qty matches).
+        stop_dist: float | None = None
+        if eff_stop_mult is not None:
+            a = atr_stop[s]
+            if not np.isnan(a) and a > 0:
+                stop_dist = eff_stop_mult * a
+        q = position_size(
+            equity=avail,
+            price=fill,
+            leverage=capital.leverage,
+            sizing=capital.sizing,
+            per_trade_pct=capital.per_trade_pct,
+            stop_distance=stop_dist,
+            fixed_fraction=capital.size_pct,
+        )
+        if q <= 0:
+            return  # ATR sizing with no stop yet (warm-up) ⇒ skip, never oversize
+        qty = q
         entry_commission = comm_rate * qty * fill
         cash -= entry_commission
         pos = side
@@ -242,16 +281,17 @@ def run_engine(
         trade_funding = 0.0
         tot_commission += entry_commission
         tot_slippage += slip
-        # Fix the stop/target band from the ATR known at the entry *signal* bar s.
-        stop_level = np.nan
+        # Stop band (from the same stop distance that sized the trade) + target + liq.
+        stop_level = fill - side * stop_dist if stop_dist is not None else np.nan
         target_level = np.nan
-        if risk_on:
-            a = atr_risk[s]
+        if target_mult is not None:
+            a = atr_stop[s]
             if not np.isnan(a):
-                if risk_exit.atr_stop_mult is not None:
-                    stop_level = fill - side * risk_exit.atr_stop_mult * a
-                if risk_exit.atr_target_mult is not None:
-                    target_level = fill + side * risk_exit.atr_target_mult * a
+                target_level = fill + side * target_mult * a
+        liq = liquidation_price(
+            fill, side, capital.leverage, capital.maintenance_margin_rate
+        )
+        liq_level = liq if liq is not None else np.nan
 
     for i in range(n):
         pos_start = pos
@@ -267,7 +307,7 @@ def run_engine(
             op = open_[i]
             # Risk stop/target hit at bar s's close (fills next open, like a signal).
             c_s = close[s]
-            risk_hit = risk_on and pos != 0 and (
+            risk_hit = pos != 0 and (
                 (not np.isnan(stop_level) and pos * (c_s - stop_level) <= 0)
                 or (not np.isnan(target_level) and pos * (c_s - target_level) >= 0)
             )
@@ -282,6 +322,13 @@ def run_engine(
                     open_position(1, op, i, s)
                 elif se[s]:
                     open_position(-1, op, i, s)
+
+        # Isolated-margin liquidation on the position carried through bar i (rule #11):
+        # if the bar's range reaches the liquidation price the venue force-closes it
+        # there, so the backtest models the wipe-out instead of letting equity recover.
+        if pos != 0 and not np.isnan(liq_level):
+            if (pos > 0 and low[i] <= liq_level) or (pos < 0 and high[i] >= liq_level):
+                close_position(float(liq_level), i, i, forced=False, liquidated=True)
 
         position[i] = pos
         equity[i] = cash + (pos * qty * (close[i] - entry_fill) if pos != 0 else 0.0)

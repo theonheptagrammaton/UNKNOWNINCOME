@@ -18,6 +18,7 @@ from app.backtest.runner import _indicator_frames
 from app.data.duckdb_query import query_funding, query_ohlcv
 from app.data.timeframes import tf_to_ms
 from app.discovery.finalist.base import FinalistResult
+from app.execution.sizing import liquidation_price, position_size
 
 _MS_PER_YEAR = 365.25 * 24 * 3600 * 1000.0
 
@@ -89,8 +90,19 @@ class LeanSecondEngine:
             _wilder_atr(hi, lo, cl, costs.atr_length) if costs.slippage_model == "atr"
             else np.zeros(n)
         )
+        # Sizing is shared with the primary engine (app.execution.sizing) — only the
+        # fill/cost/funding/timing code is independent, so any alarm reflects those.
         risk_on = risk is not None and risk.enabled
-        atr_risk = _wilder_atr(hi, lo, cl, risk.atr_length) if risk_on else np.zeros(n)
+        atr_sizing = cap.sizing == "atr"
+        stop_len = risk.atr_length if risk is not None else 14
+        atr_stop = _wilder_atr(hi, lo, cl, stop_len) if (risk_on or atr_sizing) else np.zeros(n)
+        if risk_on and risk.atr_stop_mult is not None:
+            eff_stop_mult = risk.atr_stop_mult
+        elif atr_sizing:
+            eff_stop_mult = cap.default_stop_atr_mult
+        else:
+            eff_stop_mult = None
+        target_mult = risk.atr_target_mult if risk_on else None
         fund_bar = _funding_by_bar(ts, funding) if costs.funding_enabled else np.zeros(n)
 
         def fill(ref: float, is_buy: bool, s: int) -> float:
@@ -100,7 +112,7 @@ class LeanSecondEngine:
 
         cash = cap.initial_cash
         pos, qty, entry = 0, 0.0, 0.0
-        stop = target = np.nan
+        stop = target = liq = np.nan
         equity = np.empty(n)
         trades = 0
 
@@ -111,7 +123,7 @@ class LeanSecondEngine:
                 s = i - 1
                 if pos != 0:
                     c = cl[s]
-                    risk_hit = risk_on and (
+                    risk_hit = (
                         (not np.isnan(stop) and pos * (c - stop) <= 0)
                         or (not np.isnan(target) and pos * (c - target) >= 0)
                     )
@@ -119,21 +131,40 @@ class LeanSecondEngine:
                     if risk_hit or sig_exit:
                         xf = fill(op[i], pos < 0, s)
                         cash += pos * qty * (xf - entry) - comm * qty * xf
-                        pos, qty, stop, target, trades = 0, 0.0, np.nan, np.nan, trades + 1
+                        pos, qty, trades = 0, 0.0, trades + 1
+                        stop = target = liq = np.nan
                 if pos == 0:
                     side = 1 if le[s] else (-1 if se[s] else 0)
                     if side != 0 and cash > 0:
                         ef = fill(op[i], side > 0, s)
-                        if ef > 0:
-                            qty = (cash * cap.size_pct * cap.leverage) / ef
+                        stop_dist = None
+                        if eff_stop_mult is not None and ef > 0 and not np.isnan(atr_stop[s]) \
+                                and atr_stop[s] > 0:
+                            stop_dist = eff_stop_mult * atr_stop[s]
+                        q = position_size(
+                            equity=cash, price=ef, leverage=cap.leverage, sizing=cap.sizing,
+                            per_trade_pct=cap.per_trade_pct, stop_distance=stop_dist,
+                            fixed_fraction=cap.size_pct,
+                        ) if ef > 0 else 0.0
+                        if q > 0:
+                            qty = q
                             cash -= comm * qty * ef
                             pos, entry = side, ef
-                            if risk_on and not np.isnan(atr_risk[s]):
-                                a = atr_risk[s]
-                                stop = (entry - side * risk.atr_stop_mult * a
-                                        if risk.atr_stop_mult else np.nan)
-                                target = (entry + side * risk.atr_target_mult * a
-                                          if risk.atr_target_mult else np.nan)
+                            stop = entry - side * stop_dist if stop_dist is not None else np.nan
+                            target = (
+                                entry + side * target_mult * atr_stop[s]
+                                if target_mult is not None and not np.isnan(atr_stop[s])
+                                else np.nan
+                            )
+                            lq = liquidation_price(
+                                entry, side, cap.leverage, cap.maintenance_margin_rate
+                            )
+                            liq = lq if lq is not None else np.nan
+            # Isolated-margin liquidation intrabar (mirrors the primary engine).
+            if pos != 0 and not np.isnan(liq):
+                if (pos > 0 and lo[i] <= liq) or (pos < 0 and hi[i] >= liq):
+                    cash += pos * qty * (liq - entry)
+                    pos, qty, stop, target, liq, trades = 0, 0.0, np.nan, np.nan, np.nan, trades + 1
             equity[i] = cash + (pos * qty * (cl[i] - entry) if pos != 0 else 0.0)
 
         if pos != 0:  # mark out at final close (no exit cost), independent of primary

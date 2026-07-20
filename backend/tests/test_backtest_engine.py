@@ -48,7 +48,9 @@ def _no_costs() -> CostConfig:
 
 
 def _cap(cash: float = 1100.0) -> CapitalConfig:
-    return CapitalConfig(initial_cash=cash, size_pct=1.0, leverage=1.0)
+    # These prove the cost/funding/lookahead arithmetic — pin *fixed* sizing so the
+    # by-hand quantities stay clean; ATR sizing is covered in test_sizing.py.
+    return CapitalConfig(initial_cash=cash, sizing="fixed", size_pct=1.0, leverage=1.0)
 
 
 def test_single_long_trade_hand_computed() -> None:

@@ -28,6 +28,8 @@ def build_entry(
         "tf": combo.tf,
         "oos_score": wfo.oos_score,
         "is_score": opt.best_score,
+        "oos_net_return": wfo.oos_mean_net_return,
+        "oos_trades": wfo.oos_trades,
         "metrics": wfo.full_metrics,
         "wfo_layers": wfo.layers,
         "monte_carlo": wfo.monte_carlo,

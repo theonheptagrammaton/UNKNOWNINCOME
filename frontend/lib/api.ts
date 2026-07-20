@@ -9,6 +9,7 @@ export const API_BASE = `${API_ROOT}/api`;
 // ── Config (request) ─────────────────────────────────────────────────────────
 export type Direction = "long" | "short" | "both";
 export type SlippageModel = "fixed_bps" | "atr";
+export type Sizing = "atr" | "fixed";
 export type Primitive =
   | "threshold_cross"
   | "line_cross"
@@ -46,7 +47,11 @@ export interface CostConfig {
 
 export interface CapitalConfig {
   initial_cash: number;
-  size_pct: number;
+  sizing: Sizing;
+  per_trade_pct: number; // equity risked per trade (sizing === "atr")
+  default_stop_atr_mult: number; // stop = mult × ATR when the exit gives none
+  maintenance_margin_rate: number; // for the liquidation model
+  size_pct: number; // fraction of equity deployed (sizing === "fixed")
   leverage: number;
 }
 
@@ -131,6 +136,7 @@ export interface Trade {
   net_pnl: number;
   return_pct: number;
   forced: boolean;
+  liquidated?: boolean;
 }
 
 export interface CostBreakdown {

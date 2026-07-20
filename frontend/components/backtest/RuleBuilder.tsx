@@ -50,6 +50,41 @@ const PRIMITIVE_ARGS: Record<Primitive, Field[]> = {
 
 const PRIMITIVES = Object.keys(PRIMITIVE_ARGS) as Primitive[];
 
+// Plain-language help per primitive — shown as a tooltip on the selector so the
+// grammar is discoverable without leaving the builder.
+const PRIMITIVE_HELP: Record<Primitive, string> = {
+  line_cross: "One line crosses another (e.g. close crosses EMA).",
+  threshold_cross: "A series crosses a constant level (e.g. RSI crosses 30).",
+  slope: "A series is rising / falling over N bars — a trend filter.",
+  band_touch: "Price touches / breaks / reverts at a band (Bollinger, Keltner).",
+  regime: "A state test on a series (e.g. ADX > 25 → trend present).",
+  pattern: "A candlestick pattern fires bullish / bearish.",
+};
+
+const DIR_WORD: Record<string, string> = { up: "above", down: "below", cross: "across" };
+
+/** One clause rendered as a short English phrase for the readable rule summary. */
+function clauseSummary(c: RuleClause): string {
+  const a = c.args;
+  const dir = (d: unknown) => DIR_WORD[String(d)] ?? String(d);
+  switch (c.primitive) {
+    case "line_cross":
+      return `${a.a} crosses ${dir(a.direction)} ${a.b}`;
+    case "threshold_cross":
+      return `${a.x} crosses ${dir(a.direction)} ${a.level}`;
+    case "slope":
+      return `${a.x} slopes ${a.direction}`;
+    case "band_touch":
+      return `${a.price} ${String(a.mode).replace(/_/g, " ")}`;
+    case "regime":
+      return `${a.x} is ${a.rule}`;
+    case "pattern":
+      return `${a.series} pattern ${a.direction}`;
+    default:
+      return c.primitive;
+  }
+}
+
 /** Names of the operand-kind args for a primitive (empty for unknown/plugin ones). */
 export function operandArgNames(primitive: string): string[] {
   const fields = PRIMITIVE_ARGS[primitive as Primitive];
@@ -105,10 +140,14 @@ export function RuleBuilder({
       {clauses.length === 0 && (
         <p className="text-xs text-fog-faint">no clauses — never triggers</p>
       )}
+      {clauses.length > 1 && (
+        <p className="text-[11px] text-fog-faint">All clauses must hold together (AND).</p>
+      )}
       {clauses.map((clause, i) => (
         <div key={i} className="flex flex-wrap items-center gap-2">
           <select
             value={clause.primitive}
+            title={PRIMITIVE_HELP[clause.primitive]}
             onChange={(e) => {
               const p = e.target.value as Primitive;
               update(i, { primitive: p, args: defaultArgs(p, operands) });
@@ -197,6 +236,12 @@ export function RuleBuilder({
           </button>
         </div>
       ))}
+      {clauses.length > 0 && (
+        <p className="mt-1 border-t border-line pt-2 text-[11px] leading-snug text-fog-muted">
+          <span className="text-fog-faint">reads as: </span>
+          {clauses.map(clauseSummary).join(" AND ")}
+        </p>
+      )}
     </div>
   );
 }

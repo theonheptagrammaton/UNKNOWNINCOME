@@ -56,7 +56,9 @@ def _ema_cross_config(direction: str = "long") -> RunConfig:
         ),
         costs=CostConfig(commission_bps=COMMISSION_BPS, slippage_model="fixed_bps",
                          slippage_bps=SLIPPAGE_BPS, funding_enabled=False),
-        capital=CapitalConfig(initial_cash=10_000.0, size_pct=1.0, leverage=1.0),
+        # Fixed sizing so the independent simulator (qty = cash/fill) is the exact
+        # reference; ATR-risk sizing (the new default) is proven in test_sizing.py.
+        capital=CapitalConfig(initial_cash=10_000.0, sizing="fixed", size_pct=1.0, leverage=1.0),
         seed=42,
     )
 

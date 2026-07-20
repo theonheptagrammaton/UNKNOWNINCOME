@@ -415,6 +415,10 @@ class BotEngine:
             slippage_bps=(
                 config.costs.slippage_bps if config.costs.slippage_model == "fixed_bps" else None
             ),
+            # Per-genome sizing → the risk wall sizes exactly like the backtest (§8.1).
+            sizing=config.capital.sizing,
+            per_trade_pct=config.capital.per_trade_pct,
+            size_pct=config.capital.size_pct,
         )
         decision, result = risk.submit(intent)
 
@@ -626,21 +630,36 @@ class BotEngine:
         return val if val == val else None  # NaN guard
 
     def _stop_distance(self, config: RunConfig, atr: float | None) -> float | None:
-        if config.risk_exit.atr_stop_mult and atr:
-            return config.risk_exit.atr_stop_mult * atr
-        return None
+        """Effective stop distance = the exit's stop, else the ATR-sizing default.
+
+        Identical to the backtest engine's ``eff_stop_mult`` so the sizing basis and
+        the exit band agree between backtest and live (one stop, not two).
+        """
+        if atr is None:
+            return None
+        mult: float | None = None
+        if config.risk_exit.atr_stop_mult is not None:
+            mult = config.risk_exit.atr_stop_mult
+        elif config.capital.sizing == "atr":
+            mult = config.capital.default_stop_atr_mult
+        return mult * atr if mult else None
 
     def _set_band(self, config: RunConfig, intent: TradeIntent, key: str) -> None:
         atr = intent.atr
-        if not (config.risk_exit.enabled and atr):
-            self._bands.pop(key, None)
-            return
-        side = intent.position_side
         entry = intent.reference_price
+        side = intent.position_side
         sign = 1 if side == "long" else -1
         re = config.risk_exit
-        stop = (entry - sign * re.atr_stop_mult * atr) if re.atr_stop_mult else None
-        target = (entry + sign * re.atr_target_mult * atr) if re.atr_target_mult else None
+        # The stop band uses the SAME effective distance that sized the position
+        # (intent.stop_distance), so the exit and the sizing stop are one and the same.
+        stop = entry - sign * intent.stop_distance if intent.stop_distance else None
+        target = (
+            (entry + sign * re.atr_target_mult * atr)
+            if (re.enabled and re.atr_target_mult and atr) else None
+        )
+        if stop is None and target is None:
+            self._bands.pop(key, None)
+            return
         self._bands[key] = (stop, target, side)
 
     @staticmethod

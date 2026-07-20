@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 Direction = Literal["long", "short", "both"]
 SlippageModel = Literal["fixed_bps", "atr"]
+Sizing = Literal["atr", "fixed"]
 
 
 class IndicatorSpec(BaseModel):
@@ -71,10 +72,22 @@ class CostConfig(BaseModel):
 
 
 class CapitalConfig(BaseModel):
-    """Starting capital and position sizing."""
+    """Starting capital and position sizing (the model backtest + live *share*).
+
+    ``sizing`` defaults to ``"atr"`` (doc §16 decision #4) so a backtest sizes exactly
+    like the live risk wall: risk ``per_trade_pct`` of equity to a stop. The stop
+    comes from :class:`RiskExitConfig` when set, else ``default_stop_atr_mult × ATR``;
+    either way an ATR-sized position carries that stop as a real exit. ``size_pct`` is
+    used only in the legacy ``"fixed"`` mode (deploy a fraction of equity as levered
+    notional). See :mod:`app.execution.sizing` for the shared implementation.
+    """
 
     initial_cash: float = 10_000.0
-    size_pct: float = 1.0  # fraction of equity deployed per position
+    sizing: Sizing = "atr"
+    per_trade_pct: float = 1.0  # equity risked per trade (sizing == "atr")
+    default_stop_atr_mult: float = 2.0  # stop = mult × ATR when the exit gives none
+    maintenance_margin_rate: float = 0.005  # ≈ Binance USDT-M, for the liquidation model
+    size_pct: float = 1.0  # fraction of equity deployed per position (sizing == "fixed")
     leverage: float = 1.0
 
 
