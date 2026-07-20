@@ -29,6 +29,11 @@ class IndicatorSpec(BaseModel):
     params: dict[str, float] = Field(default_factory=dict)
 
 
+BUILTIN_PRIMITIVES = (
+    "threshold_cross", "line_cross", "slope", "band_touch", "regime", "pattern"
+)
+
+
 class RuleClause(BaseModel):
     """One signal primitive (§5.4) applied to resolved operands.
 
@@ -36,11 +41,12 @@ class RuleClause(BaseModel):
     an indicator ``key`` (single-output), or ``key.output`` (multi-output).
     Constant operands (``level``) and enum operands (``direction``/``mode``/``rule``)
     are passed through verbatim.
+
+    ``primitive`` is one of :data:`BUILTIN_PRIMITIVES` or a name contributed by a
+    Python plugin (doc §8.6); it is typed ``str`` so plugin primitives validate.
     """
 
-    primitive: Literal[
-        "threshold_cross", "line_cross", "slope", "band_touch", "regime", "pattern"
-    ]
+    primitive: str
     args: dict[str, str | float | int] = Field(default_factory=dict)
 
 

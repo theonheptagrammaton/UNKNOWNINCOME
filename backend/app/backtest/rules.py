@@ -80,6 +80,13 @@ def build_clause(clause: RuleClause, ops: dict[str, pd.Series]) -> pd.Series:
         return regime(_series(ops, a["x"]), str(a["rule"]))
     if p == "pattern":
         return pattern(_series(ops, a["series"]), a.get("direction", "any"))  # type: ignore[arg-type]
+    # Fall back to a plugin-contributed primitive (doc §8.6, Python layer). Lazy
+    # import keeps the built-in path free of any strategy-plugin dependency.
+    from app.strategy.plugin_registry import get_plugin_registry
+
+    custom = get_plugin_registry().get_primitive(p)
+    if custom is not None:
+        return custom(ops, dict(a)).fillna(False).astype(bool)
     raise ValueError(f"unknown primitive: {p!r}")
 
 
