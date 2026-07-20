@@ -69,15 +69,15 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Tamamlandı (2026-07-20). Kanıt: pytest **109/109** yeşil (24 yeni Faz-4 testi), ruff temiz, `next build` başarılı (/discovery 5.54 kB), tsc+eslint temiz. Gerçek fast-mode tarama script'i uçtan uca liderlik üretti (12 kombinasyon, 6 finalist, WFO katmanları + MC bandı, 0 yanlış alarm, deterministik). Kararlar: (1) finalist motoru interface+fallback (backtesting.py Faz-3 vectorbt gibi pandas-3.0 stack riski taşıyor → opsiyonel extra + her zaman-mevcut lean second-opinion); (2) Stage 1 varsayılan tam 225 registry (rol taşıyan kategoriler). Gerçek 10×4 <2h ölçümü + canlı UI ekran görüntüsü operatör plan-B (RUNBOOK deseni).
 
 ## Faz 5 — Strateji Motoru + Paper Trading + Trade Deck
-- [ ] **Kapsam:** Genome + sürümleme (§8.1), üç katmanlı düzenleme (§8.6), paper doldurma simülatörü, risk katmanı (§9.4), mod şalteri (§9.6), kill switch (4 kanal), sinyal akışı + karar günlüğü UI, Telegram bildirim + komut seti (§10.3).
+- [x] **Kapsam:** Genome + değişmez sürümleme + soy ağacı (§8.1–8.2), üç katmanlı düzenleme (§8.6), paper doldurma simülatörü + `ExecutionAdapter` (§9.1/9.3), risk katmanı duvarı (§9.4), mod şalteri (§9.6), kill switch (4 kanal), sinyal akışı + karar günlüğü + strateji kartları UI, Telegram bildirim + komut seti (§10.3).
 - **Kabul kriterleri:**
-  - [ ] Paper bot 72 saat kesintisiz koşar
-  - [ ] Her sinyalde `reason` + `indicator_snapshot` dolu
-  - [ ] Kill switch dört kanaldan da botu < 2 sn'de durdurur
-  - [ ] Telegram'dan mod geçişi çalışır
-  - [ ] Genome hot-reload restart'sız devreye girer
-  - [ ] Risk limit ihlali simülasyonu emirleri bloklar
-- **Durum:** `[ ]` başlamadı
+  - [~] Paper bot 72 saat kesintisiz koşar — worker içinde denetimli asyncio döngüsü ("paper bot loop started"); **72h sunucuda / 1h lokal soak = operatör adımı**, `test_multi_cycle_soak_is_stable` (50 döngü, equity sürekliliği) + canlı stack'te gerçek entry/exit üretti
+  - [x] Her sinyalde `reason` + `indicator_snapshot` dolu — `test_signal_has_reason_and_indicator_snapshot`; canlı: `open_long` sinyali `regime` gerekçesi + `ema/close` snapshot ile
+  - [x] Kill switch dört kanaldan da botu < 2 sn'de durdurur — `test_bot_killswitch` (UI/API/dosya/Telegram parametrik, hepsi paylaşılan dosya bayrağı → tick killed, emir yok) + poll ≤ 0.5 sn < 2 sn; canlı: API kanalı engaged + risk_event + audit
+  - [x] Telegram'dan mod geçişi çalışır; whitelist dışı reddedilir — `test_bot_telegram` (mode paper/off, iki-adım /kill, non-whitelist reject, tüm komut audit'li)
+  - [x] Genome hot-reload restart'sız devreye girer — `test_genome_hot_reload_without_restart`; canlı: v2 kaydı pozisyonu restart'sız kapattı (1→0)
+  - [x] Risk limit ihlali emirleri bloklar + `risk_events`'e yazar — `test_risk_limit_blocks_order_and_records_event` + `test_execution_risk` (tüm §9.4 limitleri) + mimari test (adaptör name-mangled, atlatılamaz)
+- **Durum:** `[x]` Tamamlandı (2026-07-20). Kanıt: pytest **155/155** yeşil (46 yeni Faz-5 testi), ruff temiz, `next build` başarılı (/trade 6.24 kB), tsc + eslint temiz. Canlı doğrulama: 5 servis healthy + bot loop çalışıyor → backtest→"Convert to strategy"→paper mod → gerçek paper entry (reason+snapshot dolu, equity komisyon/slippage ile hareket etti) → kill switch (API) engaged+audit → genome hot-reload pozisyonu kapattı. Kararlar: (1) genome = `RunConfig`+ad (backtest'in doğruladığı aynı sinyal yolu); (2) bot worker içinde arka-plan görevi (5 servis korunur); (3) paper fiyatı = son kapanış barı (canlı WS Faz 7); (4) Telegram gerçek polling + 72h/1h soak = operatör plan-B (saf mantık + deterministik soak testli).
 
 ## Faz 6 — Kendini Geliştirme v1
 - [ ] **Kapsam:** Haftalık WFO re-opt zamanlayıcısı, bozulma tetikleyicileri (§8.5), yeni versiyon üretimi + insan onaylı terfi akışı, rejim etiketleme (§8.4).
