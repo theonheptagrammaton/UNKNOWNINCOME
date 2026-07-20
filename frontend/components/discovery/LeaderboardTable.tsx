@@ -1,8 +1,9 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import Link from "next/link";
 
-import type { LeaderboardEntry } from "@/lib/api";
+import { convertToStrategy, type LeaderboardEntry } from "@/lib/api";
 import { fmtDate, fmtNum, fmtPct } from "@/lib/format";
 
 type SortKey =
@@ -35,7 +36,13 @@ function metricValue(e: LeaderboardEntry, key: SortKey): number {
   return typeof v === "number" ? v : -Infinity;
 }
 
-export function LeaderboardTable({ entries }: { entries: LeaderboardEntry[] }) {
+export function LeaderboardTable({
+  entries,
+  scanId,
+}: {
+  entries: LeaderboardEntry[];
+  scanId?: string;
+}) {
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [asc, setAsc] = useState(true);
   const [open, setOpen] = useState<number | null>(null);
@@ -124,7 +131,7 @@ export function LeaderboardTable({ entries }: { entries: LeaderboardEntry[] }) {
                 {isOpen && (
                   <tr className="border-t border-line bg-void">
                     <td colSpan={COLUMNS.length + 4} className="p-4">
-                      <EntryDetail entry={e} />
+                      <EntryDetail entry={e} scanId={scanId} />
                     </td>
                   </tr>
                 )}
@@ -137,7 +144,57 @@ export function LeaderboardTable({ entries }: { entries: LeaderboardEntry[] }) {
   );
 }
 
-function EntryDetail({ entry }: { entry: LeaderboardEntry }) {
+function ConvertButton({ scanId, rank }: { scanId?: string; rank?: number }) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  if (!scanId || rank === undefined) {
+    return (
+      <button
+        type="button"
+        disabled
+        title="Open this scan's leaderboard to convert an entry"
+        className="cursor-not-allowed rounded border border-line px-4 py-2 text-xs text-fog-faint opacity-60"
+      >
+        Convert to strategy →
+      </button>
+    );
+  }
+
+  const convert = async () => {
+    setState("busy");
+    setMsg(null);
+    try {
+      const s = await convertToStrategy({ scan_id: scanId, rank });
+      setState("done");
+      setMsg(`Created “${s.name}” as a candidate.`);
+    } catch (e) {
+      setState("error");
+      setMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        onClick={convert}
+        disabled={state === "busy" || state === "done"}
+        className="rounded bg-fog px-4 py-2 text-xs font-semibold text-void transition-colors hover:bg-fog-muted disabled:opacity-50"
+      >
+        {state === "busy" ? "Converting…" : state === "done" ? "Converted ✓" : "Convert to strategy →"}
+      </button>
+      {msg && <span className="text-xs text-fog-muted">{msg}</span>}
+      {state === "done" && (
+        <Link href="/trade" className="text-xs text-paper underline hover:text-fog">
+          Open Trade Deck
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function EntryDetail({ entry, scanId }: { entry: LeaderboardEntry; scanId?: string }) {
   const g = entry.genome;
   return (
     <div className="flex flex-col gap-4">
@@ -242,16 +299,7 @@ function EntryDetail({ entry }: { entry: LeaderboardEntry }) {
         </div>
       )}
 
-      <div>
-        <button
-          type="button"
-          disabled
-          title="Available in Phase 5 (strategy engine)"
-          className="cursor-not-allowed rounded border border-line px-4 py-2 text-xs text-fog-faint opacity-60"
-        >
-          Convert to strategy →
-        </button>
-      </div>
+      <ConvertButton scanId={scanId} rank={entry.rank} />
     </div>
   );
 }

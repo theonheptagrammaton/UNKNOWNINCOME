@@ -69,6 +69,7 @@ export function DiscoveryLab() {
   const [error, setError] = useState<string | null>(null);
 
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
+  const [scanId, setScanId] = useState<string | null>(null);
   const [history, setHistory] = useState<LeaderboardRow[]>([]);
   const [scanMeta, setScanMeta] = useState<{
     candidates: number;
@@ -121,6 +122,7 @@ export function DiscoveryLab() {
         symbols: symbols.length > 0 ? symbols : null,
       };
       const { scan_id } = await postScan(payload);
+      setScanId(scan_id);
       for (let i = 0; i < MAX_POLLS; i++) {
         if (cancelled.current) return;
         await new Promise((r) => setTimeout(r, POLL_MS));
@@ -333,7 +335,7 @@ export function DiscoveryLab() {
               ))}
             </div>
           )}
-          <LeaderboardTable entries={entries} />
+          <LeaderboardTable entries={entries} scanId={scanId ?? undefined} />
         </div>
       )}
 

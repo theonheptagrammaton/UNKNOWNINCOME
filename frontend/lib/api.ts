@@ -394,3 +394,161 @@ export async function fetchLeaderboard(
 ): Promise<{ count: number; sort_by: string; rows: LeaderboardRow[] }> {
   return getJSON(`/discovery/leaderboard?sort_by=${sortBy}&limit=${limit}`);
 }
+
+// ── Strategies (doc §8) + Trade Bot (doc §9, §10) ────────────────────────────
+export type BotMode = "off" | "paper" | "live";
+
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`POST ${path} → ${res.status}: ${detail}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export interface StrategyHealth {
+  num_trades: number;
+  rolling_pf: number | null;
+  last_pnl: number | null;
+  open_positions: number;
+}
+
+export interface StrategyOut {
+  id: string;
+  name: string;
+  mode: BotMode;
+  active_version_id: string | null;
+  active_version: number | null;
+  status: string | null;
+  created_from_run_id: string | null;
+  created_at: string | null;
+  health: StrategyHealth;
+}
+
+export interface StrategyVersion {
+  id: string;
+  strategy_id: string;
+  version: number;
+  genome: { name: string; config: RunConfig };
+  genome_hash: string;
+  status: string;
+  parent_version_id: string | null;
+  source: Record<string, unknown> | null;
+  wfo_report: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export interface BotStatus {
+  global_mode: BotMode;
+  live_enabled: boolean;
+  killswitch: boolean;
+  equity: number | null;
+  exposure: number;
+  daily_pnl: number | null;
+  open_positions: number;
+  regime: string | null;
+}
+
+export interface Position {
+  symbol: string;
+  side: string;
+  qty: number;
+  entry_price: number;
+  leverage: number;
+  entry_ts: number;
+  strategy_id: string | null;
+}
+
+export interface Portfolio {
+  positions: Position[];
+  equity: number | null;
+  exposure: number;
+}
+
+export type ReasonClause = { primitive: string; args: Record<string, unknown> };
+
+export interface SignalRow {
+  id: string;
+  strategy_id: string;
+  strategy_version_id: string;
+  ts: number;
+  symbol: string;
+  tf: string;
+  action: string;
+  reason: Record<string, ReasonClause[]>;
+  indicator_snapshot: Record<string, number | null>;
+  outcome: string;
+  outcome_detail: Record<string, unknown> | null;
+}
+
+export interface DecisionRow {
+  kind: "signal" | "risk";
+  ts: number;
+  type?: string;
+  symbol?: string | null;
+  detail?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface EquityPoint {
+  time: number;
+  value: number;
+  exposure: number;
+}
+
+export interface BotSettings {
+  risk_limits: Record<string, number | string>;
+  promotion_gate: Record<string, number>;
+}
+
+// Strategies
+export const fetchStrategies = () => getJSON<StrategyOut[]>("/strategies");
+export const fetchStrategy = (id: string) => getJSON<StrategyOut>(`/strategies/${id}`);
+export const fetchVersions = (id: string) =>
+  getJSON<StrategyVersion[]>(`/strategies/${id}/versions`);
+export const addVersion = (id: string, genome: unknown, wfo_report?: unknown) =>
+  postJSON<StrategyVersion>(`/strategies/${id}/versions`, { genome, wfo_report });
+export const diffVersions = (id: string, a: string, b: string) =>
+  getJSON<{ a: number; b: number; changes: Record<string, { from: unknown; to: unknown }> }>(
+    `/strategies/${id}/diff?a=${a}&b=${b}`,
+  );
+export const setStrategyMode = (id: string, mode: BotMode) =>
+  postJSON<StrategyOut>(`/strategies/${id}/mode`, { mode });
+export const promoteStrategy = (id: string) =>
+  postJSON<StrategyOut>(`/strategies/${id}/promote`, {});
+export const pauseStrategy = (id: string) =>
+  postJSON<StrategyOut>(`/strategies/${id}/pause`, {});
+export const retireStrategy = (id: string) =>
+  postJSON<StrategyOut>(`/strategies/${id}/retire`, {});
+export const convertToStrategy = (body: {
+  run_id?: string;
+  scan_id?: string;
+  rank?: number;
+  name?: string;
+}) => postJSON<StrategyOut>("/strategies/from-run", body);
+export const reloadPlugins = () =>
+  postJSON<{ loaded: string[]; primitives: string[] }>("/strategies/reload-plugins", {});
+
+// Bot control + reads
+export const fetchBotStatus = () => getJSON<BotStatus>("/bot/status");
+export const setBotMode = (mode: BotMode) =>
+  postJSON<{ mode: BotMode }>("/bot/mode", { mode, scope: "global" });
+export const engageKill = (reason = "ui") =>
+  postJSON<{ killswitch: boolean }>("/bot/killswitch", { reason });
+export const clearKill = () =>
+  postJSON<{ killswitch: boolean }>("/bot/killswitch/clear", {});
+export const fetchPortfolio = () => getJSON<Portfolio>("/bot/portfolio");
+export const fetchSignals = (since = 0) =>
+  getJSON<{ signals: SignalRow[] }>(`/bot/signals?since=${since}&limit=100`);
+export const fetchDecisions = () =>
+  getJSON<{ decisions: DecisionRow[] }>("/bot/decisions?limit=100");
+export const fetchBotEquity = () =>
+  getJSON<{ points: EquityPoint[] }>("/bot/equity?limit=1000");
+export const fetchBotSettings = () => getJSON<BotSettings>("/bot/settings");
+export const updateBotSettings = (body: Partial<BotSettings>) =>
+  postJSON<BotSettings>("/bot/settings", body);
