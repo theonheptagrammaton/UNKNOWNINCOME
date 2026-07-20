@@ -29,3 +29,14 @@ class NullNotifier:
     async def notify(self, text: str) -> None:
         self.sent.append(text)
         logger.debug("notify(null): %s", text)
+
+
+def default_notifier() -> Notifier:
+    """The configured sink: real Telegram when a token is set, else the null sink."""
+    from app.core.config import settings
+
+    if settings.telegram_enabled and settings.telegram_bot_token:
+        from app.bot.telegram import TelegramNotifier
+
+        return TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+    return NullNotifier()

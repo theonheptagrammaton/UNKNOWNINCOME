@@ -8,7 +8,7 @@ tick (hot). Every mutation records an ``audit_log`` row via the underlying helpe
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,12 +19,14 @@ from app.core.audit import write_audit
 from app.core.db import get_session
 from app.core.settings_store import (
     KEY_PROMOTION_GATE,
+    KEY_REGIME_LOCK,
     KEY_RISK_LIMITS,
     get_setting,
     set_setting,
 )
 from app.execution.risk import RiskLimits
 from app.models.risk import RiskEvent
+from app.models.strategy import Strategy, StrategyVersion
 from app.models.system import AuditLog
 from app.models.trading import EquitySnapshot, Signal, Trade
 
@@ -52,6 +54,12 @@ class KillRequest(BaseModel):
 class SettingsRequest(BaseModel):
     risk_limits: dict | None = None
     promotion_gate: dict | None = None
+    regime_lock: dict | None = None  # {"mode": "off"|"auto"|"trend"|"range"|…}
+
+
+class DegradeSimRequest(BaseModel):
+    strategy_id: str
+    trials: int | None = None  # optimizer budget for the simulated re-opt
 
 
 async def _last_equity(session: AsyncSession) -> EquitySnapshot | None:
@@ -88,6 +96,9 @@ async def status(session: AsyncSession = Depends(get_session)) -> dict:
     ).scalar_one_or_none()
     equity = last_eq.equity if last_eq else None
     daily_pnl = (equity - day_open.equity) if (equity is not None and day_open) else None
+    from app.core.config import settings as _settings
+
+    regime_lock = await get_setting(session, KEY_REGIME_LOCK)
     return {
         "global_mode": global_mode,
         "live_enabled": mode_mod.LIVE_ENABLED,
@@ -96,7 +107,8 @@ async def status(session: AsyncSession = Depends(get_session)) -> dict:
         "exposure": last_eq.exposure if last_eq else 0.0,
         "daily_pnl": daily_pnl,
         "open_positions": len(open_trades),
-        "regime": None,  # regime labelling arrives in Phase 6 (doc §8.4)
+        # Regime gate mode (doc §8.4): off | auto | an explicit locked regime.
+        "regime": (regime_lock or {}).get("mode", _settings.regime_lock_default),
     }
 
 
@@ -260,17 +272,22 @@ async def audit(
 
 @router.get("/settings")
 async def get_settings(session: AsyncSession = Depends(get_session)) -> dict:
-    """Risk limits + promotion gate (doc §10.2 settings panel)."""
+    """Risk limits + promotion gate + regime lock (doc §10.2 settings panel)."""
+    from app.core.config import settings as _settings
+
     limits = await get_setting(session, KEY_RISK_LIMITS) or RiskLimits().model_dump()
     gate = await get_setting(session, KEY_PROMOTION_GATE) or DEFAULT_PROMOTION_GATE
-    return {"risk_limits": limits, "promotion_gate": gate}
+    regime_lock = await get_setting(session, KEY_REGIME_LOCK) or {
+        "mode": _settings.regime_lock_default
+    }
+    return {"risk_limits": limits, "promotion_gate": gate, "regime_lock": regime_lock}
 
 
 @router.post("/settings")
 async def update_settings(
     req: SettingsRequest, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    """Persist risk limits / promotion gate; validated against the RiskLimits schema."""
+    """Persist risk limits / promotion gate / regime lock; risk limits are validated."""
     if req.risk_limits is not None:
         validated = RiskLimits.model_validate(req.risk_limits).model_dump()
         await set_setting(session, KEY_RISK_LIMITS, validated)
@@ -278,8 +295,66 @@ async def update_settings(
     if req.promotion_gate is not None:
         await set_setting(session, KEY_PROMOTION_GATE, req.promotion_gate)
         await write_audit(session, "ui", "settings.promotion_gate", req.promotion_gate)
+    if req.regime_lock is not None:
+        mode = str(req.regime_lock.get("mode", "off"))
+        await set_setting(session, KEY_REGIME_LOCK, {"mode": mode})
+        await write_audit(session, "ui", "settings.regime_lock", {"mode": mode})
     await session.commit()
     return await get_settings(session)
+
+
+@router.post("/debug/degrade")
+async def debug_degrade(
+    req: DegradeSimRequest, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Test hook (doc §15/Faz-6): simulate degradation → pause + pending version + notify.
+
+    Disabled in production. Forces the §8.5 reaction on one strategy so the whole
+    self-improvement path can be exercised end-to-end without waiting for real decay.
+    """
+    from app.core.config import settings as _settings
+
+    if _settings.app_env == "production":
+        raise HTTPException(404, "debug endpoints are disabled in production")
+
+    from app.bot.notifier import default_notifier
+    from app.strategy import regen
+    from app.strategy.genome import genome_config
+    from app.strategy.health import evaluate_degradation
+
+    strat = await session.get(Strategy, req.strategy_id)
+    if strat is None or strat.active_version_id is None:
+        raise HTTPException(404, f"strategy {req.strategy_id!r} has no active version")
+    version = await session.get(StrategyVersion, strat.active_version_id)
+    config = genome_config(version.genome)
+
+    verdict = await evaluate_degradation(
+        session, req.strategy_id, wfo_report=version.wfo_report,
+        initial_cash=config.capital.initial_cash,
+    )
+    verdict.degraded = True  # force the simulation
+    if not verdict.triggers:
+        verdict.triggers = ["debug_simulation"]
+
+    try:
+        new_version = await regen.degrade_and_regenerate(
+            session, req.strategy_id, verdict=verdict,
+            reason="degrade:debug_simulation", trials=req.trials,
+            notifier=default_notifier(),
+        )
+    except regen.service.StrategyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    await session.commit()
+    return {
+        "strategy_id": req.strategy_id,
+        "paused": True,
+        "verdict": verdict.as_dict(),
+        "pending_version": (
+            {"id": new_version.id, "version": new_version.version,
+             "status": new_version.status, "regime": new_version.regime}
+            if new_version else None
+        ),
+    }
 
 
 def _signal_row(s: Signal) -> dict:

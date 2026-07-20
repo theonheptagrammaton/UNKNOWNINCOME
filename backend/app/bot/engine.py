@@ -37,6 +37,7 @@ from app.bot.notifier import NullNotifier
 from app.bot.signals import LatestSignal, evaluate_latest
 from app.core.clock import Clock, now_ms
 from app.core.config import settings
+from app.core.settings_store import KEY_REGIME_LOCK, get_setting
 from app.data.duckdb_query import query_funding, query_ohlcv
 from app.execution.paper import PaperAdapter
 from app.execution.risk import RiskLayer, RiskLimits, TradeIntent
@@ -44,6 +45,9 @@ from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
 from app.models.trading import EquitySnapshot, Order, Signal, Trade
 from app.strategy.genome import genome_config
+from app.strategy.health import evaluate_degradation
+from app.strategy.regen import pause_for_degradation
+from app.strategy.regime import classify_regime, regime_matches
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,8 @@ class BotEngine:
         tick_seconds: float | None = None,
         kill_poll_seconds: float | None = None,
         initial_cash: float | None = None,
+        reopt_enqueue: Callable[[str], Awaitable[None]] | None = None,
+        monitor_degradation: bool | None = None,
     ) -> None:
         self._sf = session_factory
         self._notifier = notifier or NullNotifier()
@@ -92,6 +98,15 @@ class BotEngine:
         self._last_funding_ts: dict[str, int] = {}
         self._kill_handled = False
         self._rehydrated = False
+        # Self-improvement wiring (Phase 6, §8.5). Degradation monitoring runs when a
+        # trade closes; when a strategy degrades the engine pauses it and (best-effort)
+        # queues a re-optimization via ``reopt_enqueue`` (the worker wires arq; tests
+        # leave it None so no Redis is touched).
+        self._reopt_enqueue = reopt_enqueue
+        self._monitor_degradation = (
+            settings.reopt_enabled if monitor_degradation is None else monitor_degradation
+        )
+        self._regime_cache: dict[tuple[str, str, str], tuple[int, object]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     async def rehydrate(self, session: AsyncSession) -> None:
@@ -160,23 +175,69 @@ class BotEngine:
     async def _load_active(
         self, session: AsyncSession, global_mode: str
     ) -> list[tuple[Strategy, StrategyVersion, RunConfig]]:
-        """Strategies whose effective mode ≥ paper, with their active genome (hot-reload)."""
+        """Strategies whose effective mode ≥ paper, with their active genome (hot-reload).
+
+        Filters out ``pending_approval`` versions (unapproved genomes never trade, §8.5;
+        the active pointer should never reach one, but this is defence in depth) and
+        applies the regime gate (§8.4) when a lock is configured.
+        """
         strategies = (await session.execute(select(Strategy))).scalars().all()
+        lock_mode = await self._regime_lock(session)
         out: list[tuple[Strategy, StrategyVersion, RunConfig]] = []
         for strat in strategies:
             eff = effective_mode(global_mode, strat.mode)
             if not should_trade(eff) or strat.active_version_id is None:
                 continue
             version = await session.get(StrategyVersion, strat.active_version_id)
-            if version is None or version.status == "retired":
+            if version is None or version.status in ("retired", "pending_approval"):
                 continue
             try:
                 config = genome_config(version.genome)
             except Exception as exc:  # pragma: no cover - bad genome guard
                 logger.warning("strategy %s has an invalid genome: %s", strat.id, exc)
                 continue
+            if not self._regime_eligible(version, config, lock_mode):
+                continue
             out.append((strat, version, config))
         return out
+
+    async def _regime_lock(self, session: AsyncSession) -> str:
+        """The active regime-lock mode (doc §8.4): off | auto | an explicit regime."""
+        setting = await get_setting(session, KEY_REGIME_LOCK)
+        return (setting or {}).get("mode", settings.regime_lock_default)
+
+    def _regime_eligible(
+        self, version: StrategyVersion, config: RunConfig, lock_mode: str
+    ) -> bool:
+        """Whether a strategy may run under the current regime lock (doc §8.4)."""
+        if lock_mode == "off" or version.regime is None:
+            return True  # gating off, or unlabelled ⇒ always eligible
+        if lock_mode == "auto":
+            return regime_matches(version.regime, self._current_regime(config))
+        return regime_matches(version.regime, lock_mode)  # manual lock
+
+    def _current_regime(self, config: RunConfig) -> object | None:
+        """Current market regime for a symbol/tf (cached per last-closed bar)."""
+        key = (config.market, config.symbol, config.tf)
+        try:
+            ohlcv = query_ohlcv(config.market, config.symbol, config.tf).reset_index(drop=True)
+        except Exception:  # pragma: no cover - no data ⇒ no gating signal
+            return None
+        if len(ohlcv) < 2:
+            return None
+        last_ts = int(ohlcv["ts"].iloc[-1])
+        cached = self._regime_cache.get(key)
+        if cached and cached[0] == last_ts:
+            return cached[1]
+        label = classify_regime(
+            ohlcv,
+            adx_period=settings.regime_adx_period,
+            adx_trend_threshold=settings.regime_adx_trend_threshold,
+            atr_period=settings.regime_atr_period,
+            atr_high_pct=settings.regime_atr_high_pct,
+        )
+        self._regime_cache[key] = (last_ts, label)
+        return label
 
     # ── per-strategy evaluation ──────────────────────────────────────────────
     async def _evaluate(
@@ -354,7 +415,35 @@ class BotEngine:
                     f"💵 {config.symbol} closed @ {fill.price:.4f} "
                     f"pnl {open_trade.pnl:+.2f} (paper)"
                 )
+                if self._monitor_degradation:
+                    await self._maybe_degrade(session, strat, version, config)
             self._bands.pop(key, None)
+
+    async def _maybe_degrade(
+        self,
+        session: AsyncSession,
+        strat: Strategy,
+        version: StrategyVersion,
+        config: RunConfig,
+    ) -> None:
+        """After a close, check §8.5 triggers; if degraded, pause + queue re-opt."""
+        if strat.mode == "off":
+            return
+        verdict = await evaluate_degradation(
+            session, strat.id, wfo_report=version.wfo_report,
+            initial_cash=config.capital.initial_cash,
+        )
+        if not verdict.degraded:
+            return
+        reason = "degrade:" + ",".join(verdict.triggers)
+        await pause_for_degradation(
+            session, strat, verdict, reason=reason, notifier=self._notifier
+        )
+        if self._reopt_enqueue is not None:
+            try:
+                await self._reopt_enqueue(strat.id)
+            except Exception as exc:  # pragma: no cover - queue best-effort
+                logger.warning("reopt enqueue failed for %s: %s", strat.id, exc)
 
     # ── kill switch ──────────────────────────────────────────────────────────
     async def _handle_kill(self, session: AsyncSession, ts: int) -> None:

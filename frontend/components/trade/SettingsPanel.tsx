@@ -25,6 +25,10 @@ const GATE_LABELS: Record<string, string> = {
   max_drawdown_pct: "Max drawdown (%)",
 };
 
+// Regime lock modes (doc §8.4): off = no gating, auto = match the live regime,
+// or lock the desk to a single regime pool.
+const REGIME_MODES = ["off", "auto", "trend", "range", "trend/high", "range/low"] as const;
+
 function NumberField({
   label,
   value,
@@ -62,6 +66,8 @@ export function SettingsPanel() {
     setSettings((s) => (s ? { ...s, risk_limits: { ...s.risk_limits, [k]: v } } : s));
   const patchGate = (k: string, v: number) =>
     setSettings((s) => (s ? { ...s, promotion_gate: { ...s.promotion_gate, [k]: v } } : s));
+  const patchRegime = (mode: string) =>
+    setSettings((s) => (s ? { ...s, regime_lock: { mode } } : s));
 
   const save = async () => {
     if (!settings) return;
@@ -82,7 +88,7 @@ export function SettingsPanel() {
     <section className="flex flex-col gap-3 rounded border border-line bg-graphite p-4">
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-fog">Settings</h3>
-        <span className="text-xs text-fog-faint">risk limits · promotion gate</span>
+        <span className="text-xs text-fog-faint">risk · promotion · regime</span>
       </div>
 
       {!settings ? (
@@ -113,6 +119,29 @@ export function SettingsPanel() {
                   onChange={(v) => patchGate(k, v)}
                 />
               ))}
+            </div>
+          </div>
+
+          <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3">
+            <span className="text-[11px] uppercase tracking-wider text-fog-faint">
+              Regime gate (doc §8.4) — bot runs only the pool matching the active regime
+            </span>
+            <div className="flex flex-wrap overflow-hidden rounded border border-line text-xs">
+              {REGIME_MODES.map((m) => {
+                const active = (settings.regime_lock?.mode ?? "off") === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => patchRegime(m)}
+                    className={`px-3 py-1 uppercase tracking-wider transition-colors ${
+                      active ? "bg-fog text-void" : "text-fog-muted hover:text-fog"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

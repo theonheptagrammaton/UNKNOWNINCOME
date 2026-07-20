@@ -425,6 +425,7 @@ export interface StrategyOut {
   active_version_id: string | null;
   active_version: number | null;
   status: string | null;
+  regime: string | null;
   created_from_run_id: string | null;
   created_at: string | null;
   health: StrategyHealth;
@@ -437,10 +438,20 @@ export interface StrategyVersion {
   genome: { name: string; config: RunConfig };
   genome_hash: string;
   status: string;
+  regime: string | null;
   parent_version_id: string | null;
   source: Record<string, unknown> | null;
   wfo_report: Record<string, unknown> | null;
   created_at: string | null;
+}
+
+// A self-generated version awaiting human approval (doc §8.5).
+export interface PendingVersion {
+  version: StrategyVersion;
+  strategy_id: string;
+  strategy_name: string;
+  active_version: number | null;
+  diff: Record<string, { from: unknown; to: unknown }>;
 }
 
 export interface BotStatus {
@@ -504,6 +515,7 @@ export interface EquityPoint {
 export interface BotSettings {
   risk_limits: Record<string, number | string>;
   promotion_gate: Record<string, number>;
+  regime_lock?: { mode: string };
 }
 
 // Strategies
@@ -533,6 +545,23 @@ export const convertToStrategy = (body: {
 }) => postJSON<StrategyOut>("/strategies/from-run", body);
 export const reloadPlugins = () =>
   postJSON<{ loaded: string[]; primitives: string[] }>("/strategies/reload-plugins", {});
+
+// Self-improvement (doc §8.3–8.5): re-opt, approval queue, approve/reject.
+export const fetchPending = () => getJSON<PendingVersion[]>("/strategies/pending");
+export const reoptimizeStrategy = (id: string, trials?: number) =>
+  postJSON<{ produced: boolean; version: StrategyVersion | null }>(
+    `/strategies/${id}/reoptimize`,
+    { trials },
+  );
+export const approveVersion = (id: string, versionId: string) =>
+  postJSON<StrategyOut>(`/strategies/${id}/versions/${versionId}/approve`, {});
+export const rejectVersion = (id: string, versionId: string) =>
+  postJSON<StrategyVersion>(`/strategies/${id}/versions/${versionId}/reject`, {});
+export const simulateDegrade = (strategyId: string, trials?: number) =>
+  postJSON<{ paused: boolean; verdict: Record<string, unknown>; pending_version: unknown }>(
+    "/bot/debug/degrade",
+    { strategy_id: strategyId, trials },
+  );
 
 // Bot control + reads
 export const fetchBotStatus = () => getJSON<BotStatus>("/bot/status");

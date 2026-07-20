@@ -46,6 +46,7 @@ class StrategyOut(BaseModel):
     active_version_id: str | None
     active_version: int | None
     status: str | None
+    regime: str | None
     created_from_run_id: str | None
     created_at: str | None
     health: dict
@@ -58,10 +59,21 @@ class VersionOut(BaseModel):
     genome: dict
     genome_hash: str
     status: str
+    regime: str | None
     parent_version_id: str | None
     source: dict | None
     wfo_report: dict | None
     created_at: str | None
+
+
+class PendingOut(BaseModel):
+    """A self-generated version awaiting human approval (doc §8.5)."""
+
+    version: VersionOut
+    strategy_id: str
+    strategy_name: str
+    active_version: int | None
+    diff: dict  # active genome → proposed genome
 
 
 async def _health(session: AsyncSession, strategy_id: str) -> dict:
@@ -104,6 +116,7 @@ async def _strategy_out(session: AsyncSession, strat: Strategy) -> StrategyOut:
         active_version_id=strat.active_version_id,
         active_version=version.version if version else None,
         status=version.status if version else None,
+        regime=version.regime if version else None,
         created_from_run_id=strat.created_from_run_id,
         created_at=strat.created_at.isoformat() if strat.created_at else None,
         health=await _health(session, strat.id),
@@ -113,7 +126,8 @@ async def _strategy_out(session: AsyncSession, strat: Strategy) -> StrategyOut:
 def _version_out(v: StrategyVersion) -> VersionOut:
     return VersionOut(
         id=v.id, strategy_id=v.strategy_id, version=v.version, genome=v.genome,
-        genome_hash=v.genome_hash, status=v.status, parent_version_id=v.parent_version_id,
+        genome_hash=v.genome_hash, status=v.status, regime=v.regime,
+        parent_version_id=v.parent_version_id,
         source=v.source, wfo_report=v.wfo_report,
         created_at=v.created_at.isoformat() if v.created_at else None,
     )
@@ -147,6 +161,28 @@ async def list_strategies(session: AsyncSession = Depends(get_session)) -> list[
         await session.execute(select(Strategy).order_by(Strategy.created_at.desc()))
     ).scalars().all()
     return [await _strategy_out(session, s) for s in strategies]
+
+
+@router.get("/pending", response_model=list[PendingOut])
+async def list_pending(session: AsyncSession = Depends(get_session)) -> list[PendingOut]:
+    """Self-generated versions awaiting approval, with a diff vs the active one (§8.5)."""
+    pending = await service.pending_versions(session)
+    out: list[PendingOut] = []
+    for v in pending:
+        strat = await session.get(Strategy, v.strategy_id)
+        active = (
+            await session.get(StrategyVersion, strat.active_version_id)
+            if strat and strat.active_version_id else None
+        )
+        diff = diff_genomes(active.genome, v.genome) if active else {}
+        out.append(PendingOut(
+            version=_version_out(v),
+            strategy_id=v.strategy_id,
+            strategy_name=strat.name if strat else "—",
+            active_version=active.version if active else None,
+            diff=diff,
+        ))
+    return out
 
 
 @router.get("/{strategy_id}", response_model=StrategyOut)
@@ -245,6 +281,60 @@ async def retire(strategy_id: str, session: AsyncSession = Depends(get_session))
         raise HTTPException(400, str(exc)) from exc
     await session.commit()
     return await _strategy_out(session, await session.get(Strategy, strategy_id))
+
+
+@router.post("/{strategy_id}/versions/{version_id}/approve", response_model=StrategyOut)
+async def approve(
+    strategy_id: str, version_id: str, session: AsyncSession = Depends(get_session)
+) -> StrategyOut:
+    """Approve a pending self-generated version → it runs in paper (doc §8.5 terfi kapısı)."""
+    try:
+        await service.approve_version(session, strategy_id, version_id, actor="ui")
+    except service.StrategyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await session.commit()
+    return await _strategy_out(session, await session.get(Strategy, strategy_id))
+
+
+@router.post("/{strategy_id}/versions/{version_id}/reject", response_model=VersionOut)
+async def reject(
+    strategy_id: str, version_id: str, session: AsyncSession = Depends(get_session)
+) -> VersionOut:
+    """Reject a pending version (retire it); the strategy stays paused (doc §8.5)."""
+    try:
+        version = await service.reject_version(session, strategy_id, version_id, actor="ui")
+    except service.StrategyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await session.commit()
+    return _version_out(version)
+
+
+class ReoptRequest(BaseModel):
+    trials: int | None = None  # Optuna budget override (small for a quick manual run)
+
+
+@router.post("/{strategy_id}/reoptimize")
+async def reoptimize(
+    strategy_id: str, req: ReoptRequest, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Manually trigger a WFO re-optimization → a pending-approval version (doc §8.3)."""
+    from app.bot.notifier import default_notifier
+    from app.strategy import regen
+
+    try:
+        version = await regen.regenerate(
+            session, strategy_id, reason="manual", trials=req.trials,
+            notifier=default_notifier(), actor="ui",
+        )
+    except service.StrategyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except KeyError as exc:  # unknown generator kind
+        raise HTTPException(400, str(exc)) from exc
+    await session.commit()
+    return {
+        "produced": version is not None,
+        "version": _version_out(version).model_dump() if version else None,
+    }
 
 
 @router.post("/reload-plugins")

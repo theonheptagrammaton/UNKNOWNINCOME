@@ -67,5 +67,33 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""  # single whitelisted chat id
     telegram_enabled: bool = False
 
+    # ─── Self-improvement (Phase 6, doc §8.3–8.5) ─────────────────────────
+    # Weekly WFO re-optimization + degradation-triggered regeneration.
+    reopt_enabled: bool = True
+    reopt_generator: str = "wfo_reopt"  # v1 producer (doc §8.3); genetic/rl reserved
+    reopt_trials: int = 30  # Optuna budget per re-optimization
+    reopt_train_days: int = 90  # walk-forward window (doc §6.5)
+    reopt_test_days: int = 30
+    reopt_step_days: int = 30
+    reopt_monte_carlo_runs: int = 300
+    reopt_plateau_ratio: float = 0.5  # neighbours must score ≥ ratio × best
+    reopt_plateau_steps: int = 1
+
+    # Degradation triggers (doc §8.5): rolling-N PF < floor OR realized drawdown
+    # breaching the WFO 95% Monte-Carlo lower band → auto-pause + queue re-opt.
+    degrade_rolling_window: int = 30  # last-N closed trades
+    degrade_min_trades: int = 30  # need this many before the PF trigger can fire
+    degrade_min_profit_factor: float = 1.0
+    degrade_mc_drawdown_enabled: bool = True
+
+    # Regime gating (doc §8.4): off | auto | trend | range | trend/high | …
+    # ``off`` (default) = no gating (opt-in); ``auto`` = match the live market
+    # regime; an explicit value = manual lock.
+    regime_lock_default: str = "off"
+    regime_adx_period: int = 14
+    regime_adx_trend_threshold: float = 25.0
+    regime_atr_period: int = 14
+    regime_atr_high_pct: float = 0.5
+
 
 settings = Settings()

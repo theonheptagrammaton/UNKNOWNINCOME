@@ -46,15 +46,25 @@ async def startup(ctx: dict[str, Any]) -> None:
         await _start_bot(ctx)
 
 
+async def _enqueue_reopt(strategy_id: str) -> None:
+    """Best-effort enqueue of a degradation-triggered re-optimization (doc §8.5)."""
+    from app.core.queue import enqueue
+
+    await enqueue("reopt_strategy_job", strategy_id)
+
+
 async def _start_bot(ctx: dict[str, Any]) -> None:
     """Rehydrate + run the paper trading loop as a supervised background task."""
     import asyncio
 
     from app.bot.engine import BotEngine
+    from app.bot.notifier import default_notifier
     from app.bot.telegram import run_polling
     from app.core.db import SessionLocal
 
-    engine = BotEngine(SessionLocal)
+    engine = BotEngine(
+        SessionLocal, notifier=default_notifier(), reopt_enqueue=_enqueue_reopt
+    )
     try:
         async with SessionLocal() as session:
             await engine.rehydrate(session)
@@ -145,6 +155,35 @@ async def run_discovery_job(ctx: dict[str, Any], scan_id: str) -> dict[str, str]
     return {"scan_id": scan_id}
 
 
+async def reopt_strategy_job(ctx: dict[str, Any], strategy_id: str) -> dict[str, str | None]:
+    """Re-optimize one strategy (WFO v1) → a pending-approval version (doc §8.3, §8.5)."""
+    from app.bot.notifier import default_notifier
+    from app.core.db import SessionLocal
+    from app.strategy import regen
+
+    async with SessionLocal() as session:
+        version = await regen.regenerate(
+            session, strategy_id, reason="degrade", notifier=default_notifier()
+        )
+        await session.commit()
+        return {"strategy_id": strategy_id, "version_id": version.id if version else None}
+
+
+async def scheduled_reopt(ctx: dict[str, Any]) -> None:
+    """Cron: weekly WFO re-optimization of every running strategy (doc §8.3 v1)."""
+    if not settings.reopt_enabled:
+        return
+    from app.bot.notifier import default_notifier
+    from app.core.db import SessionLocal
+    from app.strategy.scheduler import run_scheduled_reopt
+
+    try:
+        produced = await run_scheduled_reopt(SessionLocal, default_notifier())
+        logger.info("weekly reopt: %d pending version(s) queued for approval", len(produced))
+    except Exception as exc:  # pragma: no cover - cron resilience
+        logger.warning("scheduled_reopt failed: %s", exc)
+
+
 async def incremental_sync(ctx: dict[str, Any]) -> None:
     """Cron: pull newly closed bars for the active universe (best-effort)."""
     from app.core.db import SessionLocal
@@ -199,9 +238,11 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
     on_shutdown = shutdown
-    functions = [sync_data_job, run_backtest_job, run_discovery_job]
+    functions = [sync_data_job, run_backtest_job, run_discovery_job, reopt_strategy_job]
     cron_jobs = [
         cron(heartbeat, second={0, 15, 30, 45}, run_at_startup=True),
         cron(incremental_sync, minute=set(range(0, 60, 5))),
         cron(refresh_universe, weekday="mon", hour=0, minute=5),
+        # Weekly WFO re-optimization (doc §8.3 v1). Sunday 03:00 UTC, off-peak.
+        cron(scheduled_reopt, weekday="sun", hour=3, minute=0),
     ]

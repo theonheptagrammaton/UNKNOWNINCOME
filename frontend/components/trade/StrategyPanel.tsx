@@ -8,8 +8,10 @@ import {
   fetchVersions,
   pauseStrategy,
   promoteStrategy,
+  reoptimizeStrategy,
   retireStrategy,
   setStrategyMode,
+  simulateDegrade,
   type BotMode,
   type StrategyOut,
   type StrategyVersion,
@@ -232,7 +234,7 @@ function StrategyCard({ strategy, onChange }: { strategy: StrategyOut; onChange:
     <div className="flex flex-col rounded border border-line bg-void p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold text-fog">{strategy.name}</span>
             <span
               className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
@@ -242,6 +244,14 @@ function StrategyCard({ strategy, onChange }: { strategy: StrategyOut; onChange:
               {strategy.status ?? "—"}
             </span>
             <span className="text-[11px] text-fog-faint">v{strategy.active_version ?? "—"}</span>
+            {strategy.regime && (
+              <span
+                className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-fog-muted"
+                title="Suited market regime (doc §8.4)"
+              >
+                {strategy.regime}
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-fog-faint">
             <span>trades: {h.num_trades}</span>
@@ -281,6 +291,24 @@ function StrategyCard({ strategy, onChange }: { strategy: StrategyOut; onChange:
           className="rounded border border-line px-2.5 py-1 text-[11px] text-fog-muted hover:text-fog disabled:opacity-40"
         >
           Retire
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => act(() => reoptimizeStrategy(strategy.id))}
+          title="WFO re-optimize on the latest data → a pending-approval version (doc §8.3)"
+          className="rounded border border-line px-2.5 py-1 text-[11px] text-fog-muted hover:text-fog disabled:opacity-40"
+        >
+          Re-optimize
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => act(() => simulateDegrade(strategy.id))}
+          title="Simulate degradation (doc §8.5): pause + generate a proposal (dev only)"
+          className="rounded border border-line px-2.5 py-1 text-[11px] text-fog-faint hover:text-loss disabled:opacity-40"
+        >
+          Simulate degrade
         </button>
         <button
           type="button"

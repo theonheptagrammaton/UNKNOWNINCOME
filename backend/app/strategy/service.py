@@ -11,20 +11,48 @@ run or a discovery leaderboard entry, carrying its provenance and WFO report.
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backtest.config import RunConfig
 from app.core.audit import write_audit
+from app.core.config import settings
 from app.discovery.store import read_leaderboard
 from app.models.backtest import BacktestRun
 from app.models.discovery import DiscoveryScan
 from app.models.strategy import MODE_ORDER, STATUSES, Strategy, StrategyVersion
 from app.strategy.genome import genome_hash, normalize_genome
 
+logger = logging.getLogger(__name__)
+
+_AUTO = object()  # sentinel: "auto-label the regime from data"
+
 
 class StrategyError(ValueError):
     """Raised on invalid strategy operations (bad status, unknown id, …)."""
+
+
+def label_regime(config_dump: dict) -> str | None:
+    """Best-effort regime tag for a genome's config (doc §8.4); ``None`` on no data."""
+    try:
+        from app.data.duckdb_query import query_ohlcv
+        from app.strategy.regime import classify_regime
+
+        cfg = RunConfig.model_validate(config_dump)
+        ohlcv = query_ohlcv(cfg.market, cfg.symbol, cfg.tf).reset_index(drop=True)
+        label = classify_regime(
+            ohlcv,
+            adx_period=settings.regime_adx_period,
+            adx_trend_threshold=settings.regime_adx_trend_threshold,
+            atr_period=settings.regime_atr_period,
+            atr_high_pct=settings.regime_atr_high_pct,
+        )
+        return label.label if label else None
+    except Exception as exc:  # no data / bad config ⇒ leave unlabelled (always eligible)
+        logger.debug("regime labelling skipped: %s", exc)
+        return None
 
 
 async def _next_version(session: AsyncSession, strategy_id: str) -> int:
@@ -47,16 +75,25 @@ async def add_version(
     source: dict | None = None,
     status: str = "candidate",
     actor: str = "api",
+    activate: bool = True,
+    regime: str | None = _AUTO,  # type: ignore[assignment]
 ) -> StrategyVersion:
-    """Append a new immutable version and repoint the strategy at it (hot-reload).
+    """Append a new immutable version, optionally repointing the strategy (hot-reload).
 
-    The parent is the strategy's current active version; the strategy's name tracks
-    the newest genome. Raises :class:`StrategyError` if the strategy is unknown.
+    The parent is the strategy's current active version. When ``activate`` is True
+    (the default — UI/JSON/plugin edits, §8.6) the strategy is repointed at the new
+    version so it hot-reloads on the bot's next tick, and its name tracks the genome.
+
+    When ``activate`` is False (a self-generated, unapproved version, §8.5) the
+    version is stored but the active pointer is **left untouched** — the guarantee
+    that an unapproved version never trades. ``regime`` defaults to auto-labelling
+    from data (§8.4); pass a value to override or ``None`` to leave it unlabelled.
     """
     strategy = await session.get(Strategy, strategy_id)
     if strategy is None:
         raise StrategyError(f"unknown strategy: {strategy_id!r}")
     norm = normalize_genome(genome)  # validates; raises GenomeError on bad payload
+    regime_label = label_regime(norm["config"]) if regime is _AUTO else regime
 
     version = StrategyVersion(
         strategy_id=strategy_id,
@@ -65,19 +102,24 @@ async def add_version(
         genome_hash=genome_hash(norm),
         wfo_report=wfo_report,
         status=status if status in STATUSES else "candidate",
+        regime=regime_label,
         parent_version_id=strategy.active_version_id,
         source=source,
     )
     session.add(version)
     await session.flush()  # assign version.id
 
-    strategy.active_version_id = version.id
-    strategy.name = norm["name"]
+    if activate:
+        strategy.active_version_id = version.id
+        strategy.name = norm["name"]
     await write_audit(
         session,
         actor,
         "strategy.version.add",
-        {"strategy_id": strategy_id, "version": version.version, "hash": version.genome_hash},
+        {
+            "strategy_id": strategy_id, "version": version.version,
+            "hash": version.genome_hash, "status": version.status, "activated": activate,
+        },
     )
     return version
 
@@ -216,3 +258,65 @@ async def promote(session: AsyncSession, strategy_id: str, actor: str = "api") -
     if version.status not in order or version.status == "live":
         raise StrategyError(f"cannot promote from status {version.status!r}")
     return await set_status(session, strategy_id, order[order.index(version.status) + 1], actor)
+
+
+async def _pending_version(
+    session: AsyncSession, strategy_id: str, version_id: str
+) -> tuple[Strategy, StrategyVersion]:
+    """Load a strategy + one of its ``pending_approval`` versions (or raise)."""
+    strategy = await session.get(Strategy, strategy_id)
+    if strategy is None:
+        raise StrategyError(f"unknown strategy: {strategy_id!r}")
+    version = await session.get(StrategyVersion, version_id)
+    if version is None or version.strategy_id != strategy_id:
+        raise StrategyError(f"version {version_id!r} does not belong to {strategy_id!r}")
+    if version.status != "pending_approval":
+        raise StrategyError(f"version {version.version} is not pending approval")
+    return strategy, version
+
+
+async def approve_version(
+    session: AsyncSession, strategy_id: str, version_id: str, actor: str = "api"
+) -> StrategyVersion:
+    """Human approval (doc §8.5): activate a pending version → it runs in paper.
+
+    Repoints the active pointer (hot-reload), moves the version to ``paper`` and
+    switches the strategy's mode back to Paper so it resumes — "onaylanınca paper'da
+    devreye girer". This is the terfi kapısı for a self-generated version.
+    """
+    strategy, version = await _pending_version(session, strategy_id, version_id)
+    strategy.active_version_id = version.id
+    strategy.name = version.genome["name"]
+    version.status = "paper"
+    strategy.mode = "paper"
+    await write_audit(
+        session, actor, "strategy.approve",
+        {"strategy_id": strategy_id, "version": version.version, "hash": version.genome_hash},
+    )
+    return version
+
+
+async def reject_version(
+    session: AsyncSession, strategy_id: str, version_id: str, actor: str = "api"
+) -> StrategyVersion:
+    """Human rejection (doc §8.5): retire the pending version; the strategy stays paused."""
+    _strategy, version = await _pending_version(session, strategy_id, version_id)
+    version.status = "retired"
+    await write_audit(
+        session, actor, "strategy.reject",
+        {"strategy_id": strategy_id, "version": version.version, "hash": version.genome_hash},
+    )
+    return version
+
+
+async def pending_versions(session: AsyncSession) -> list[StrategyVersion]:
+    """All versions awaiting human approval, newest first (doc §8.5 approval queue)."""
+    return list(
+        (
+            await session.execute(
+                select(StrategyVersion)
+                .where(StrategyVersion.status == "pending_approval")
+                .order_by(StrategyVersion.created_at.desc())
+            )
+        ).scalars().all()
+    )

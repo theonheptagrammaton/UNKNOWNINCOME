@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { fmtDateTime, fmtMoney, fmtNum } from "@/lib/format";
 
+import { ApprovalPanel } from "./ApprovalPanel";
 import { StrategyPanel } from "./StrategyPanel";
 import { SettingsPanel } from "./SettingsPanel";
 
@@ -404,6 +405,8 @@ export function TradeDeck() {
         onKill={() => guard(() => engageKill("ui"))}
         onClearKill={() => guard(() => clearKill())}
       />
+
+      <ApprovalPanel onChange={refresh} />
 
       <StrategyPanel strategies={strategies} onChange={refresh} />
 

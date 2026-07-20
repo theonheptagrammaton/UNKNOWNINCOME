@@ -35,8 +35,10 @@ def _uuid() -> str:
 # Per-strategy mode switch (doc §9.6). Effective mode = min(global, strategy),
 # ordered Off < Paper < Live. LIVE is selectable but engine-refused until Phase 7.
 MODE_ORDER = {"off": 0, "paper": 1, "live": 2}
-# Version lifecycle (doc §8.2): candidate → paper → live → retired.
-STATUSES = ("candidate", "paper", "live", "retired")
+# Version lifecycle (doc §8.2): candidate → paper → live → retired. Phase 6 adds
+# ``pending_approval``: a self-generated (WFO re-opt) version that is stored but is
+# NOT the active pointer — it must never trade until a human approves it (§8.5).
+STATUSES = ("candidate", "paper", "live", "retired", "pending_approval")
 
 
 class Strategy(Base):
@@ -70,6 +72,9 @@ class StrategyVersion(Base):
     genome_hash: Mapped[str] = mapped_column(String(16), index=True)
     wfo_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="candidate", index=True)
+    # Regime this version suits (doc §8.4), e.g. "trend/high"; None when unlabelled
+    # (unlabelled versions are always eligible so gating never starves the bot).
+    regime: Mapped[str | None] = mapped_column(String(16), nullable=True)
     parent_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # Provenance: {"kind": "run"|"scan", "id": ..., "rank": ...} (doc §8.1 lineage).
     source: Mapped[dict | None] = mapped_column(JSON, nullable=True)

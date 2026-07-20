@@ -17,6 +17,7 @@ KEY_GLOBAL_MODE = "global_mode"
 KEY_KILLSWITCH = "killswitch"
 KEY_RISK_LIMITS = "risk_limits"
 KEY_PROMOTION_GATE = "promotion_gate"
+KEY_REGIME_LOCK = "regime_lock"  # {"mode": "off"|"auto"|"trend"|"range"|"trend/high"|…}
 
 
 async def get_setting(session: AsyncSession, key: str) -> dict | None:
