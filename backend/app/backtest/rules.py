@@ -24,6 +24,54 @@ from app.indicators.signals import (
 
 _PRICE_FIELDS = ("open", "high", "low", "close", "volume")
 
+# Which ``args`` keys of each built-in primitive name an *operand* (a price field
+# or indicator key/output) rather than a constant/enum. Used to validate that
+# every referenced operand actually resolves before a run starts.
+_OPERAND_ARGS: dict[str, tuple[str, ...]] = {
+    "threshold_cross": ("x",),
+    "line_cross": ("a", "b"),
+    "slope": ("x",),
+    "band_touch": ("price", "upper", "lower"),
+    "regime": ("x",),
+    "pattern": ("series",),
+}
+
+
+class OperandError(ValueError):
+    """A rule references an operand that no configured indicator/price supplies."""
+
+
+def unknown_operands(rules: Rules, ops: dict[str, pd.Series]) -> list[str]:
+    """Operand names referenced by any built-in clause that ``ops`` can't resolve.
+
+    Plugin primitives (§8.6) resolve their own operands, so they're skipped here.
+    Returns names in first-seen order (deduplicated).
+    """
+    missing: list[str] = []
+    seen: set[str] = set()
+    clauses = (*rules.long_entry, *rules.long_exit, *rules.short_entry, *rules.short_exit)
+    for clause in clauses:
+        for arg in _OPERAND_ARGS.get(clause.primitive, ()):
+            name = clause.args.get(arg)
+            if name is None:
+                continue
+            key = str(name)
+            if key not in ops and key not in seen:
+                seen.add(key)
+                missing.append(key)
+    return missing
+
+
+def assert_operands_resolve(rules: Rules, ops: dict[str, pd.Series]) -> None:
+    """Raise :class:`OperandError` listing any unresolved operand + what's available."""
+    missing = unknown_operands(rules, ops)
+    if missing:
+        available = ", ".join(sorted(ops))
+        raise OperandError(
+            f"rule references unknown operand(s): {', '.join(missing)}. "
+            f"Available operands: {available}"
+        )
+
 
 def resolve_operands(
     ohlcv: pd.DataFrame, indicator_frames: dict[str, pd.DataFrame]

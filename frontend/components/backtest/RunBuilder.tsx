@@ -5,12 +5,13 @@ import type {
   Direction,
   IndicatorDef,
   IndicatorSpec,
+  RuleClause,
   RunConfig,
   SlippageModel,
 } from "@/lib/api";
 
 import { IndicatorPicker } from "./IndicatorPicker";
-import { RuleBuilder } from "./RuleBuilder";
+import { operandArgNames, RuleBuilder } from "./RuleBuilder";
 
 const PRICE_FIELDS = ["open", "high", "low", "close", "volume"];
 const TFS = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -39,6 +40,39 @@ function operandsFor(indicators: IndicatorSpec[], defs: IndicatorDef[]): string[
   return ops;
 }
 
+const RULE_LISTS = ["long_entry", "long_exit", "short_entry", "short_exit"] as const;
+
+// Rewrite operand references (bare ``oldKey`` and ``oldKey.output``) when an
+// indicator key is renamed, so rules never dangle after an edit.
+function renameOperand(clauses: RuleClause[], oldKey: string, newKey: string): RuleClause[] {
+  return clauses.map((c) => {
+    const args = { ...c.args };
+    for (const arg of operandArgNames(c.primitive)) {
+      const v = args[arg];
+      if (v === oldKey) args[arg] = newKey;
+      else if (typeof v === "string" && v.startsWith(`${oldKey}.`))
+        args[arg] = `${newKey}${v.slice(oldKey.length)}`;
+    }
+    return { ...c, args };
+  });
+}
+
+// Operand names referenced by any clause that the current operand set can't
+// resolve — these would fail the run server-side (unknown operand).
+function danglingOperands(rules: RunConfig["rules"], operands: string[]): string[] {
+  const known = new Set(operands);
+  const out = new Set<string>();
+  for (const list of RULE_LISTS) {
+    for (const c of rules[list]) {
+      for (const arg of operandArgNames(c.primitive)) {
+        const v = c.args[arg];
+        if (typeof v === "string" && v !== "" && !known.has(v)) out.add(v);
+      }
+    }
+  }
+  return [...out];
+}
+
 export function RunBuilder({
   config,
   defs,
@@ -57,10 +91,18 @@ export function RunBuilder({
   const patch = (p: Partial<RunConfig>) => onChange({ ...config, ...p });
   const symbols = [...new Set(dataRows.map((r) => r.symbol))].sort();
   const operands = operandsFor(config.indicators, defs);
+  const dangling = danglingOperands(config.rules, operands);
 
   // ── Indicators ──────────────────────────────────────────────────────────
   const setIndicator = (i: number, next: IndicatorSpec) =>
     patch({ indicators: config.indicators.map((s, j) => (j === i ? next : s)) });
+  const renameKey = (i: number, newKey: string) => {
+    const oldKey = config.indicators[i].key;
+    const indicators = config.indicators.map((s, j) => (j === i ? { ...s, key: newKey } : s));
+    const rules = { ...config.rules };
+    for (const list of RULE_LISTS) rules[list] = renameOperand(config.rules[list], oldKey, newKey);
+    patch({ indicators, rules });
+  };
   const removeIndicator = (i: number) =>
     patch({ indicators: config.indicators.filter((_, j) => j !== i) });
   const addIndicator = () =>
@@ -151,7 +193,7 @@ export function RunBuilder({
                 <span className={labelCls}>key</span>
                 <input
                   value={spec.key}
-                  onChange={(e) => setIndicator(i, { ...spec, key: e.target.value })}
+                  onChange={(e) => renameKey(i, e.target.value)}
                   className={`${inputCls} w-full`}
                 />
               </div>
@@ -316,12 +358,20 @@ export function RunBuilder({
         </Labeled>
       </div>
 
-      <div>
+      <div className="flex flex-col gap-2">
+        {dangling.length > 0 && (
+          <p className="text-xs text-loss">
+            Unknown operand{dangling.length > 1 ? "s" : ""}:{" "}
+            <span className="font-mono">{dangling.join(", ")}</span> — referenced by a rule but
+            not produced by any indicator. Fix the highlighted operand{dangling.length > 1 ? "s" : ""}{" "}
+            before running.
+          </p>
+        )}
         <button
           type="button"
           onClick={onRun}
-          disabled={running}
-          className="rounded bg-fog px-6 py-2.5 text-sm font-semibold text-void transition-colors hover:bg-fog-muted disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={running || dangling.length > 0}
+          className="w-fit rounded bg-fog px-6 py-2.5 text-sm font-semibold text-void transition-colors hover:bg-fog-muted disabled:cursor-not-allowed disabled:opacity-50"
         >
           {running ? "Running…" : "Run backtest"}
         </button>

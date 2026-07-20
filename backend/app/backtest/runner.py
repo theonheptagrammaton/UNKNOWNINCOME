@@ -13,7 +13,7 @@ import pandas as pd
 from app.backtest.config import RunConfig, config_hash
 from app.backtest.engine import BacktestResult, run_engine
 from app.backtest.metrics import compute_metrics
-from app.backtest.rules import build_signals, resolve_operands
+from app.backtest.rules import assert_operands_resolve, build_signals, resolve_operands
 from app.data.duckdb_query import query_funding, query_ohlcv
 from app.indicators.compute import compute_indicator
 
@@ -134,6 +134,7 @@ def run_backtest(config: RunConfig) -> dict:
 
     frames = _indicator_frames(config, ohlcv)
     ops = resolve_operands(ohlcv, frames)
+    assert_operands_resolve(config.rules, ops)
     signals = build_signals(config.rules, ops, config.direction, len(ohlcv))
 
     funding = None

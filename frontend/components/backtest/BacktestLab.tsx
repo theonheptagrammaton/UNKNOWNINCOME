@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -89,7 +90,15 @@ export function BacktestLab() {
             {defs.length} indicators · {dataRows.length} data series
           </span>
         </div>
-        <h1 className="text-3xl font-semibold tracking-tight">Backtest Lab</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-3xl font-semibold tracking-tight">Backtest Lab</h1>
+          <Link
+            href="/backtest/tutorial"
+            className="shrink-0 rounded border border-paper/50 bg-paper/10 px-4 py-2 text-sm font-medium text-paper transition-colors hover:bg-paper/20"
+          >
+            📖 Nasıl kullanılır?
+          </Link>
+        </div>
         <RunBuilder
           config={config}
           defs={defs}

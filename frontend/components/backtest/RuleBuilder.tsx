@@ -50,6 +50,12 @@ const PRIMITIVE_ARGS: Record<Primitive, Field[]> = {
 
 const PRIMITIVES = Object.keys(PRIMITIVE_ARGS) as Primitive[];
 
+/** Names of the operand-kind args for a primitive (empty for unknown/plugin ones). */
+export function operandArgNames(primitive: string): string[] {
+  const fields = PRIMITIVE_ARGS[primitive as Primitive];
+  return fields ? fields.filter((f) => f.kind === "operand").map((f) => f.name) : [];
+}
+
 function defaultArgs(primitive: Primitive, operands: string[]): RuleClause["args"] {
   const args: RuleClause["args"] = {};
   for (const f of PRIMITIVE_ARGS[primitive]) {
@@ -120,14 +126,20 @@ export function RuleBuilder({
             const setVal = (v: string | number) =>
               update(i, { ...clause, args: { ...clause.args, [f.name]: v } });
             if (f.kind === "operand") {
+              const cur = String(val);
+              // A referenced operand can go stale (indicator renamed/removed or
+              // switched to multi-output). Surface it as a marked option instead
+              // of silently mismatching the <select>, so the user can re-pick.
+              const dangling = cur !== "" && !operands.includes(cur);
               return (
                 <select
                   key={f.name}
-                  value={String(val)}
+                  value={cur}
                   onChange={(e) => setVal(e.target.value)}
-                  className={inputCls}
+                  className={`${inputCls} ${dangling ? "border-loss text-loss" : ""}`}
                   title={f.name}
                 >
+                  {dangling && <option value={cur}>{cur} (unknown)</option>}
                   {operands.map((o) => (
                     <option key={o} value={o}>
                       {o}

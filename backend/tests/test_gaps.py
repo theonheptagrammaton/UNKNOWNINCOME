@@ -31,3 +31,23 @@ def test_expected_count() -> None:
     step = tf_to_ms("1h")
     assert expected_count(0, 9 * step, "1h") == 10
     assert expected_count(5, 4, "1h") == 0
+
+
+def test_sub_interval_jitter_is_not_a_gap() -> None:
+    # Binance funding stamps drift a few ms off the 8h grid; contiguous data with
+    # ±16 ms jitter must report zero gaps (regression for the funding false-positive).
+    step = tf_to_ms("funding")
+    jitter = [0, 7, -14, 16, 3, -9, 11, -2, 5, -16]
+    ts = [i * step + jitter[i % len(jitter)] for i in range(60)]
+    gaps = find_gaps(ts, "funding")
+    assert gaps == []
+    assert count_missing(gaps, "funding") == 0
+
+
+def test_real_gap_survives_jitter() -> None:
+    # A genuinely missing interior bar is still detected even with stamp jitter.
+    step = tf_to_ms("funding")
+    ts = [0, step + 5, 2 * step - 8, 4 * step + 11]  # bar 3 (≈3*step) missing
+    gaps = find_gaps(ts, "funding")
+    assert len(gaps) == 1
+    assert count_missing(gaps, "funding") == 1
