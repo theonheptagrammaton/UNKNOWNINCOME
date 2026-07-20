@@ -7,13 +7,26 @@ from app.models.base import Base
 from app.models.discovery import DiscoveryScan
 from app.models.indicator import IndicatorDefinition
 from app.models.market import CandleSyncState, Symbol, UniverseSnapshot
+from app.models.risk import RiskEvent
+from app.models.strategy import Strategy, StrategyVersion
+from app.models.system import AuditLog, Setting
+from app.models.trading import EquitySnapshot, Order, Signal, Trade
 
 __all__ = [
+    "AuditLog",
     "BacktestRun",
     "Base",
     "CandleSyncState",
     "DiscoveryScan",
+    "EquitySnapshot",
     "IndicatorDefinition",
+    "Order",
+    "RiskEvent",
+    "Setting",
+    "Signal",
+    "Strategy",
+    "StrategyVersion",
     "Symbol",
+    "Trade",
     "UniverseSnapshot",
 ]

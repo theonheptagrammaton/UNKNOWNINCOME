@@ -48,5 +48,20 @@ class Settings(BaseSettings):
     universe_max_spread_bps: float = 5.0
     universe_volume_window_days: int = 30
 
+    # ─── Trade bot (Phase 5) ──────────────────────────────────────────────
+    # Whether the paper bot loop runs inside the worker.
+    bot_enabled: bool = True
+    bot_tick_seconds: float = 2.0  # strategy-evaluation cadence
+    bot_killswitch_poll_seconds: float = 0.5  # kill-switch poll (≤2s response)
+    bot_paper_initial_cash: float = 10_000.0
+    # Kill-switch file flag (doc §9.4). Empty ⇒ ``<data_dir>/KILLSWITCH``.
+    killswitch_file: str = ""
+
+    # Telegram remote control (doc §10.3). Real polling runs only when a token
+    # is set (operator step); the command/notification logic is pure + tested.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""  # single whitelisted chat id
+    telegram_enabled: bool = False
+
 
 settings = Settings()
