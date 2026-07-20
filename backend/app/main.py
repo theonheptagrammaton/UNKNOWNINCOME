@@ -14,12 +14,14 @@ from app.core.db import SessionLocal, init_models
 from app.core.logging import configure_logging
 from app.core.version import APP_VERSION
 from app.indicators.persistence import sync_indicator_defs
+from app.strategy.plugin_loader import load_plugins
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Create schema and sync the indicator registry (tolerant if DB is down)."""
+    """Create schema, sync the indicator registry and load strategy plugins."""
     await init_models()
+    load_plugins()  # register plugin primitives so the API validates them (doc §8.6)
     try:
         async with SessionLocal() as session:
             await sync_indicator_defs(session)

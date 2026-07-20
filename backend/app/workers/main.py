@@ -32,13 +32,60 @@ async def heartbeat(ctx: dict[str, Any]) -> None:
 
 
 async def startup(ctx: dict[str, Any]) -> None:
-    """Seed heartbeat and ensure the DB schema exists."""
+    """Seed heartbeat, ensure the schema exists and launch the paper bot loop (§9.1)."""
     from app.core.db import init_models
     from app.core.logging import configure_logging
+    from app.strategy.plugin_loader import load_plugins
 
     configure_logging()
     await heartbeat(ctx)
     await init_models()
+    load_plugins()  # register plugin primitives (doc §8.6)
+
+    if settings.bot_enabled:
+        await _start_bot(ctx)
+
+
+async def _start_bot(ctx: dict[str, Any]) -> None:
+    """Rehydrate + run the paper trading loop as a supervised background task."""
+    import asyncio
+
+    from app.bot.engine import BotEngine
+    from app.bot.telegram import run_polling
+    from app.core.db import SessionLocal
+
+    engine = BotEngine(SessionLocal)
+    try:
+        async with SessionLocal() as session:
+            await engine.rehydrate(session)
+            await session.commit()
+    except Exception as exc:  # pragma: no cover - startup resilience
+        logger.warning("bot rehydrate skipped: %s", exc)
+
+    stop = {"v": False}
+    ctx["bot_stop"] = stop
+
+    async def _sleep(seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+    ctx["bot_task"] = asyncio.create_task(
+        engine.run(stop=lambda: stop["v"], sleep=_sleep)
+    )
+    ctx["telegram_task"] = asyncio.create_task(
+        run_polling(SessionLocal, lambda: stop["v"])
+    )
+    logger.info("paper bot loop started")
+
+
+async def shutdown(ctx: dict[str, Any]) -> None:
+    """Signal the bot loop to stop and cancel its background tasks."""
+    stop = ctx.get("bot_stop")
+    if stop is not None:
+        stop["v"] = True
+    for key in ("bot_task", "telegram_task"):
+        task = ctx.get(key)
+        if task is not None:
+            task.cancel()
 
 
 async def sync_data_job(
@@ -151,6 +198,7 @@ class WorkerSettings:
 
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
+    on_shutdown = shutdown
     functions = [sync_data_job, run_backtest_job, run_discovery_job]
     cron_jobs = [
         cron(heartbeat, second={0, 15, 30, 45}, run_at_startup=True),
