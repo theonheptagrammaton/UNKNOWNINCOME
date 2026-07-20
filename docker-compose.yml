@@ -36,6 +36,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://UNKNOWNINCOME:CHANGE_ME@postgres:5432/UNKNOWNINCOME}
       DATA_DIR: ${DATA_DIR:-/data/parquet}
+      # Both loopback forms so a browser at 127.0.0.1:3000 isn't CORS-blocked.
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000"]}
     volumes:
       - parquet_data:/data/parquet
     ports:

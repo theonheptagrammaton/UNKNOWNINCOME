@@ -26,8 +26,12 @@ class Settings(BaseSettings):
     # Parquet + DuckDB market-data store root.
     data_dir: str = "/data/parquet"
 
-    # CORS: allowed frontend origins.
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # CORS: allowed frontend origins. Both loopback forms are allowed for local
+    # dev — a browser at 127.0.0.1:3000 sends that Origin, not "localhost".
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
     # ─── Market data (Phase 1) ────────────────────────────────────────────
     market: str = "binance_usdm"
