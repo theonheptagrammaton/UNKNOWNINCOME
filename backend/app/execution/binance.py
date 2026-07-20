@@ -100,7 +100,9 @@ class BinanceFuturesAdapter:
                 return OrderResult(False, None, "rejected", reason="live: qty below min precision")
             params = {"reduceOnly": bool(order.reduce_only)}
             raw = self._call(
-                lambda: self._ex.create_order(ccxt_symbol, "market", order.side, amount, None, params),
+                lambda: self._ex.create_order(
+                    ccxt_symbol, "market", order.side, amount, None, params
+                ),
                 label=f"create_order {order.symbol} {order.side}",
             )
         except Exception as exc:  # noqa: BLE001 - surface as a rejection, never crash the bot
@@ -128,7 +130,9 @@ class BinanceFuturesAdapter:
     def cancel_all(self) -> int:
         """Cancel every open order across symbols (kill-switch path, doc §9.4)."""
         try:
-            open_orders = self._call(lambda: self._ex.fetch_open_orders(), label="fetch_open_orders")
+            open_orders = self._call(
+                lambda: self._ex.fetch_open_orders(), label="fetch_open_orders"
+            )
         except Exception:  # noqa: BLE001 - if we cannot read, we cannot cancel
             return 0
         cancelled = 0

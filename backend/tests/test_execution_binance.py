@@ -80,7 +80,9 @@ def test_open_long_sets_isolated_oneway_and_leverage(caplog) -> None:
     adapter = _adapter(fake)
     with caplog.at_level(logging.INFO):
         res = adapter.place_order(
-            OrderRequest(symbol="BTCUSDT", side="buy", qty=0.01, leverage=5.0, reference_price=100.0)
+            OrderRequest(
+                symbol="BTCUSDT", side="buy", qty=0.01, leverage=5.0, reference_price=100.0
+            )
         )
     assert res.accepted and res.status == "filled"
     kinds = [c[0] for c in fake.calls]
@@ -152,7 +154,9 @@ def test_position_mode_set_once_across_orders() -> None:
     adapter = _adapter(fake)
     for _ in range(3):
         adapter.place_order(
-            OrderRequest(symbol="BTCUSDT", side="buy", qty=0.01, leverage=5.0, reference_price=100.0)
+            OrderRequest(
+                symbol="BTCUSDT", side="buy", qty=0.01, leverage=5.0, reference_price=100.0
+            )
         )
     # one-way mode is an account-level call — set exactly once.
     assert sum(1 for c in fake.calls if c[0] == "set_position_mode") == 1

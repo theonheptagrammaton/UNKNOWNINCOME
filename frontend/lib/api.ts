@@ -581,3 +581,49 @@ export const fetchBotEquity = () =>
 export const fetchBotSettings = () => getJSON<BotSettings>("/bot/settings");
 export const updateBotSettings = (body: Partial<BotSettings>) =>
   postJSON<BotSettings>("/bot/settings", body);
+
+// ── Live execution (Phase 7, doc §9.2–9.5) ───────────────────────────────────
+
+// Verdict of the paper → live promotion gate (§9.5). `failures` is the list of
+// thresholds still unmet — the UI shows them verbatim so a closed gate is never
+// a mystery. The API refuses LIVE independently; this only mirrors the reason.
+export interface GateStatus {
+  passed: boolean;
+  scope: "global" | "strategy";
+  strategy_id: string | null;
+  failures: string[];
+  metrics: {
+    num_trades?: number;
+    days?: number;
+    profit_factor?: number | null;
+    max_drawdown_pct?: number;
+    infra_ready?: boolean;
+    strategies?: { strategy_id: string; passed: boolean; metrics: Record<string, unknown> }[];
+  };
+}
+
+// Live-vs-paper divergence (doc §15/Faz-7). All values are fractions, not %.
+export interface TrackingError {
+  points: number;
+  tracking_error: number | null;
+  cum_return_live: number | null;
+  cum_return_paper: number | null;
+  cum_gap: number | null;
+  correlation: number | null;
+}
+
+// Masked key view — the plaintext never crosses this boundary (doc §13).
+export interface KeyStatus {
+  configured: boolean;
+  key_mask: string | null;
+  testnet: boolean | null;
+}
+
+export const fetchGate = (scope: "global" | "strategy" = "global", strategyId?: string) =>
+  getJSON<GateStatus>(
+    `/bot/gate?scope=${scope}${strategyId ? `&strategy_id=${strategyId}` : ""}`,
+  );
+export const fetchTracking = () => getJSON<TrackingError>("/bot/tracking");
+export const fetchKeys = () => getJSON<KeyStatus>("/bot/keys");
+export const saveKeys = (api_key: string, api_secret: string, testnet: boolean) =>
+  postJSON<KeyStatus>("/bot/keys", { api_key, api_secret, testnet });

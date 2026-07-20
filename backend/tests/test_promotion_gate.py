@@ -201,7 +201,9 @@ async def _factory(tmp_path: Path):
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def test_engine_never_builds_live_wall_while_gate_closed(tmp_path, infra, monkeypatch) -> None:
+async def test_engine_never_builds_live_wall_while_gate_closed(
+    tmp_path, infra, monkeypatch
+) -> None:
     """The live adapter is never even constructed while the gate is closed."""
     import app.execution.binance as binance_mod
 

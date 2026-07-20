@@ -22,15 +22,15 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 # ccxt error classes are matched by name so importing ccxt is not required to test.
 _TRANSIENT_NAMES = frozenset(
-    {"NetworkError", "RequestTimeout", "RateLimitExceeded", "DDoSProtection", "ExchangeNotAvailable"}
+    {
+        "NetworkError", "RequestTimeout", "RateLimitExceeded",
+        "DDoSProtection", "ExchangeNotAvailable",
+    }
 )
 
 
@@ -78,7 +78,7 @@ class CircuitBreaker:
             )
 
 
-def call_resilient(
+def call_resilient[T](
     fn: Callable[[], T],
     *,
     breaker: CircuitBreaker,

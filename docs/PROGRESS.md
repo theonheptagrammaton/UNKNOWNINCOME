@@ -96,11 +96,20 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Tamamlandı (2026-07-20). Kanıt: pytest **184/184** yeşil (29 yeni Faz-6 testi), ruff temiz, `next build` başarılı (/trade 7.37 kB), tsc + eslint temiz. Kararlar: (1) üretici modüler arayüz arkasında, v1=WFO re-opt, genetic/rl tanımlı-boş; (2) onaylanmamış versiyon `activate=False` + statü guard ile **teknik olarak** işlem yolundan dışlanır; (3) rejim kapısı varsayılan **off** (opt-in) — koşan paper botunu/soak'ı bozmaz, "manuel kilit her zaman mümkün" (§8.4); (4) re-opt worker job'u (degrade) + haftalık cron; manuel tetik senkron API. Genetik üretici (v2) ve gerçek 72h/haftalık cron tetiklemesi operatör/gelecek fazına bırakıldı.
 
 ## Faz 7 — Canlı Yürütme (kapının arkasında)
-- [ ] **Kapsam:** Binance USDT-M futures adaptörü (isolated marj, kaldıraç tavanı, likidasyon tamponu), terfi kapısı (§9.5), mikro sermaye ile kontrollü açılış, canlı-paper sapma izleme.
+- [x] **Kapsam:** Binance USDT-M futures adaptörü (isolated marj, kaldıraç tavanı, likidasyon tamponu), terfi kapısı (§9.5), mikro sermaye ile kontrollü açılış, canlı-paper sapma izleme.
 - **Kabul kriterleri:**
-  - [ ] Kapı eşiği sağlanmadan canlı emir yolunun çağrılamadığı testle kanıtlanır
-  - [ ] İlk canlı işlemler mikro boyutta ve tam loglu gerçekleşir
-- **Durum:** `[ ]` başlamadı
+  - [x] Kapı eşiği sağlanmadan canlı emir yolunun çağrılamadığı testle kanıtlanır
+  - [ ] İlk canlı işlemler mikro boyutta ve tam loglu gerçekleşir — **operatöre bağlı** (testnet anahtarı gerekir)
+- **Ek teslimler:**
+  - **Canlı adaptör** (`execution/binance.py`): paper ile aynı `ExecutionAdapter` yüzeyi (bot moddan habersiz); **isolated + one-way** ilk emirden önce set edilir, cross'a çevrilmez; kaldıraç risk duvarının onayladığı değer (10x tavan + likidasyon tamponu derating'i duvarda uygulanmış gelir); **testnet varsayılan**, mainnet ikinci bilinçli şalter; pozisyon/bakiye borsadan okunur (mutabakat kaynağı), lokal ayna yalnızca realized PnL atfı için.
+  - **Dayanıklılık** (`execution/resilience.py`): geçici hatada üstel backoff retry, kalıcı hatada retry yok; **devre kesici** ardışık N hatada açılır, cooldown boyunca hızlı başarısız, tek başarı kapatır → açık kesici = o tick emir yok.
+  - **Terfi kapısı** (`bot/promotion.py`, §9.5): ≥30 gün · ≥30 işlem · PF ≥ 1,3 · MaxDD ≤ %10 **artı** altyapı hazırlığı (config şalteri + şifreli anahtar). Ret **beş katmanda**: kapı fn · mod modülü · strateji servisi · HTTP API (422 + gerekçe) · **bot motoru canlı duvarı hiç kurmaz**; UI'da altıncı katman olarak disabled düğme + gerekçe.
+  - **Anahtar kasası** (`core/secrets.py`, §13): Fernet, ana anahtar yalnızca env'de, DB'de yalnızca şifreli metin + `····last4` maskesi; ana anahtar yoksa **düz metin fallback yok**, hata verir.
+  - **Sızıntı açığı bulundu ve kapatıldı:** redaksiyon filtresi exception traceback'ini taramıyordu — `logger.exception` ile loglanan, mesajında `apiKey=…` taşıyan bir ccxt hatası loglara **düz metin** düşüyordu. Dört vektör kapatıldı (`msg`, `args`, **traceback**, `stack_info`) + str olmayan `msg`; iki regresyon testi.
+  - **Canlı-paper sapma** (`bot/tracking.py`): per-tick getiri farkının stdev'i + kümülatif fark + korelasyon (seviye değil getiri — farklı sermaye normalize edilir).
+  - **Frontend:** `GatePanel` ("Live readiness": kapı rozeti + karşılanmayan eşiklerin birebir listesi + strateji tablosu), `TrackingPanel` ("Live vs paper", 15 sn yenileme), `SettingsPanel`'de **maskeli anahtar girişi** (password alanlar, kayıttan sonra temizlenir, geri yalnızca maske; mainnet uyarısı), `TradeDeck`'te LIVE düğmesi kapıya bağlandı (eski "disabled until Phase 7" metni kaldırıldı).
+  - **Testnet duman testi** (`backend/scripts/testnet_smoke.py`): mikro long + short round trip, venue'nun bildirdiği kaldıraç/marj modu loglanır; anahtarlar yalnızca env'den, `testnet=True` sabit, 10x üstü reddedilir.
+- **Durum:** `[~]` Kod tamam, **venue doğrulaması bekliyor** (2026-07-21). Kanıt: pytest **223/223** yeşil (+2 sızıntı regresyonu), ruff temiz (devralınan 8 Faz-7 lint hatası da düzeltildi; `call_resilient` PEP 695'e geçti), `next build` başarılı (/trade 7.37 → **9.07 kB**), tsc + eslint temiz. Kararlar: (1) kapı çok katmanlı bırakıldı — canlı emir yolu için savunma derinliği maliyetten önemli; (2) UI **kilit değil kolaylık**, sunucu bağımsız reddeder; (3) `b26c464` push edilmiş olduğu için geçmiş yeniden yazılmadı, düzeltmeler üstüne commit'lendi; (4) **testnet round-trip'i sahteleştirilmedi** — kanıtı olmayan kabul kriteri kanıtlanmış gibi işaretlenmedi. Teslim: `docs/RAPOR-faz7.md` + `docs/GO_LIVE_CHECKLIST.md`. Sıradaki adım operatörde: testnet anahtarı → smoke koşusu → kontrol listesi → mikro sermaye.
 
 ---
 

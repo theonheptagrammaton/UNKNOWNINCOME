@@ -16,6 +16,7 @@ out redacted. The key-leak acceptance test drives this path directly.
 from __future__ import annotations
 
 import logging
+import traceback
 
 from app.core.config import settings
 
@@ -47,23 +48,54 @@ def _scrub(text: str) -> str:
 
 
 class SecretRedactionFilter(logging.Filter):
-    """Scrubs registered secrets from the message and its args (doc §13 rule 7)."""
+    """Scrubs registered secrets from a record before it is emitted (doc §13 rule 7).
+
+    Four vectors, all of which have to be closed for the key-leak acceptance to hold:
+
+    * ``msg`` and ``args`` — the ordinary ``logger.info("key=%s", key)`` shape.
+    * A **non-str ``msg``**: ``logger.error(exc)`` stores the exception object and
+      formats it later via ``str()``, so it must be scrubbed as its rendered text.
+    * The **exception traceback**: ``logger.exception(...)`` renders ``exc_info``
+      *after* filters run, so a ccxt error carrying ``apiKey=…`` in its message would
+      escape. We pre-render it into ``exc_text`` scrubbed — the formatter reuses that
+      cached value instead of re-rendering the raw traceback.
+    * ``stack_info``, for the same reason.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not _SECRETS:
             return True
         if isinstance(record.msg, str):
             record.msg = _scrub(record.msg)
+        elif record.msg is not None:
+            # Non-str payload (e.g. an exception object) — render then scrub, so the
+            # formatter's later str() cannot resurrect the secret.
+            rendered = str(record.msg)
+            scrubbed = _scrub(rendered)
+            if scrubbed != rendered:
+                record.msg = scrubbed
+                record.args = ()
         if record.args:
             if isinstance(record.args, dict):
                 record.args = {k: self._scrub_arg(v) for k, v in record.args.items()}
             else:
                 record.args = tuple(self._scrub_arg(a) for a in record.args)
+        if record.exc_info and not record.exc_text:
+            record.exc_text = "".join(traceback.format_exception(*record.exc_info))
+        if record.exc_text:
+            record.exc_text = _scrub(record.exc_text)
+        if record.stack_info:
+            record.stack_info = _scrub(record.stack_info)
         return True
 
     @staticmethod
     def _scrub_arg(arg: object) -> object:
-        return _scrub(arg) if isinstance(arg, str) else arg
+        if isinstance(arg, str):
+            return _scrub(arg)
+        # Exceptions and other objects are rendered with str() by the formatter.
+        rendered = str(arg)
+        scrubbed = _scrub(rendered)
+        return scrubbed if scrubbed != rendered else arg
 
 
 def install_redaction(logger: logging.Logger) -> None:

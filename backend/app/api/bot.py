@@ -159,7 +159,9 @@ async def set_mode(req: ModeRequest, session: AsyncSession = Depends(get_session
     try:
         previous = await mode_mod.set_global_mode(session, req.mode, actor="api")
     except GateNotMet as exc:
-        raise HTTPException(422, detail={"error": "promotion_gate", **exc.result.as_dict()}) from exc
+        raise HTTPException(
+            422, detail={"error": "promotion_gate", **exc.result.as_dict()}
+        ) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await session.commit()

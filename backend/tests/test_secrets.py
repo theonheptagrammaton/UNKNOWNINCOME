@@ -91,5 +91,56 @@ def test_log_redaction_scrubs_registered_secret() -> None:
     clear_secrets()
 
 
+def _redacting_logger(name: str) -> tuple[logging.Logger, io.StringIO]:
+    """A logger wired to an in-memory stream through the redaction filter."""
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SecretRedactionFilter())
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger, stream
+
+
+def test_log_redaction_scrubs_exception_traceback() -> None:
+    """A ccxt error carrying the key in its message must not escape via the traceback.
+
+    ``logger.exception`` renders ``exc_info`` *after* filters run, so this is the
+    leak vector the "hata mesajları taranır" acceptance is really about.
+    """
+    clear_secrets()
+    register_secret(KEY, SECRET)
+    logger, stream = _redacting_logger("test.redaction.traceback")
+
+    try:
+        raise ValueError(f"ccxt AuthenticationError: apiKey={KEY} secret={SECRET}")
+    except ValueError:
+        logger.exception("exchange call failed")
+
+    out = stream.getvalue()
+    assert KEY not in out
+    assert SECRET not in out
+    assert "Traceback" in out  # the traceback is still there — just scrubbed
+    assert "redacted" in out
+    clear_secrets()
+
+
+def test_log_redaction_scrubs_exception_passed_as_message() -> None:
+    """``logger.error(exc)`` stores the exception object; str() must not leak it."""
+    clear_secrets()
+    register_secret(KEY)
+    logger, stream = _redacting_logger("test.redaction.objmsg")
+
+    logger.error(ValueError(f"bad request with apiKey={KEY}"))
+    logger.warning("wrapped: %s", ValueError(f"apiKey={KEY}"))
+
+    out = stream.getvalue()
+    assert KEY not in out
+    assert out.count("redacted") >= 2
+    clear_secrets()
+
+
 def test_masked_view_of_unset() -> None:
     assert vault.masked_view(None) == {"configured": False, "key_mask": None, "testnet": None}

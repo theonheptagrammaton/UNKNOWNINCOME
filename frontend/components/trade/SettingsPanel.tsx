@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 
-import { fetchBotSettings, updateBotSettings, type BotSettings } from "@/lib/api";
+import {
+  fetchBotSettings,
+  fetchKeys,
+  saveKeys,
+  updateBotSettings,
+  type BotSettings,
+  type KeyStatus,
+} from "@/lib/api";
 
 // Human labels for the risk limits (doc §9.4) shown in the settings panel.
 const RISK_LABELS: Record<string, string> = {
@@ -48,6 +55,123 @@ function NumberField({
         className="rounded border border-line bg-void px-2.5 py-1.5 text-sm text-fog outline-none focus:border-fog-faint"
       />
     </label>
+  );
+}
+
+// Exchange API keys (doc §13). This form is the *only* way keys enter the system:
+// they are posted once, encrypted server-side with Fernet, and never read back —
+// the browser only ever sees a `····last4` mask. Inputs are cleared on save so the
+// plaintext does not linger in component state.
+function ApiKeysSection() {
+  const [status, setStatus] = useState<KeyStatus | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const [testnet, setTestnet] = useState(true);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchKeys()
+      .then((s) => {
+        setStatus(s);
+        if (s.testnet !== null) setTestnet(s.testnet);
+      })
+      .catch((e) => setMsg(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  const submit = async () => {
+    if (!apiKey || !apiSecret) {
+      setMsg("Both key and secret are required.");
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const saved = await saveKeys(apiKey, apiSecret, testnet);
+      setStatus(saved);
+      setApiKey("");
+      setApiSecret("");
+      setMsg(`Stored encrypted (${saved.testnet ? "testnet" : "mainnet"}).`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] uppercase tracking-wider text-fog-faint">
+          Exchange API keys (doc §13)
+        </span>
+        <span className="text-xs text-fog-faint">
+          {status?.configured ? `set · ${status.key_mask}` : "not configured"}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wider text-fog-faint">API key</span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={status?.configured ? "replace stored key" : "paste key"}
+            className="rounded border border-line bg-void px-2.5 py-1.5 text-sm text-fog outline-none focus:border-fog-faint"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wider text-fog-faint">API secret</span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={apiSecret}
+            onChange={(e) => setApiSecret(e.target.value)}
+            placeholder={status?.configured ? "replace stored secret" : "paste secret"}
+            className="rounded border border-line bg-void px-2.5 py-1.5 text-sm text-fog outline-none focus:border-fog-faint"
+          />
+        </label>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex overflow-hidden rounded border border-line text-xs">
+          {[true, false].map((t) => (
+            <button
+              key={String(t)}
+              type="button"
+              onClick={() => setTestnet(t)}
+              className={`px-3 py-1 uppercase tracking-wider transition-colors ${
+                testnet === t ? "bg-fog text-void" : "text-fog-muted hover:text-fog"
+              }`}
+            >
+              {t ? "testnet" : "mainnet"}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy}
+          className="rounded border border-line px-4 py-1.5 text-sm text-fog hover:border-fog-faint disabled:opacity-50"
+        >
+          {busy ? "Storing…" : "Store keys"}
+        </button>
+        {msg && <span className="text-xs text-fog-muted">{msg}</span>}
+      </div>
+
+      {!testnet && (
+        <p className="text-xs text-loss">
+          Mainnet keys trade real capital. Use trade-only keys with withdrawal disabled
+          and the VDS IP whitelisted (doc §13).
+        </p>
+      )}
+      <p className="text-xs text-fog-faint">
+        Keys are encrypted with Fernet server-side and never sent back to the browser —
+        only a <span className="tabular-nums">····last4</span> mask is shown.
+      </p>
+    </div>
   );
 }
 
@@ -156,9 +280,7 @@ export function SettingsPanel() {
             </button>
             {msg && <span className="text-xs text-fog-muted">{msg}</span>}
           </div>
-          <p className="text-xs text-fog-faint">
-            API keys are stored encrypted server-side and never sent to the browser (doc §13).
-          </p>
+          <ApiKeysSection />
         </>
       )}
     </section>
