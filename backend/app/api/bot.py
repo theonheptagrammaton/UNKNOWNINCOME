@@ -62,6 +62,12 @@ class DegradeSimRequest(BaseModel):
     trials: int | None = None  # optimizer budget for the simulated re-opt
 
 
+class KeysRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    testnet: bool = True  # testnet first (doc §9.2); mainnet is a deliberate choice
+
+
 async def _last_equity(session: AsyncSession) -> EquitySnapshot | None:
     return (
         await session.execute(
@@ -101,7 +107,7 @@ async def status(session: AsyncSession = Depends(get_session)) -> dict:
     regime_lock = await get_setting(session, KEY_REGIME_LOCK)
     return {
         "global_mode": global_mode,
-        "live_enabled": mode_mod.LIVE_ENABLED,
+        "live_enabled": mode_mod.live_enabled(),
         "killswitch": engaged,
         "equity": equity,
         "exposure": last_eq.exposure if last_eq else 0.0,
@@ -130,23 +136,31 @@ async def stop(session: AsyncSession = Depends(get_session)) -> dict:
 
 @router.post("/mode")
 async def set_mode(req: ModeRequest, session: AsyncSession = Depends(get_session)) -> dict:
-    """Set the global or a per-strategy switch (doc §9.6)."""
+    """Set the global or a per-strategy switch (doc §9.6).
+
+    The LIVE position is guarded by the promotion gate (§9.5): a request to go live
+    before the gate opens is refused with **422** and the failing metrics — the same
+    refusal the mode module and Telegram enforce (Phase-7 acceptance: every layer).
+    """
+    from app.bot.promotion import GateNotMet
+
     if req.scope == "strategy" and req.strategy_id:
         from app.strategy import service
 
         try:
             await service.set_mode(session, req.strategy_id, req.mode, actor="api")
+        except GateNotMet as exc:
+            raise HTTPException(422, detail={"error": "promotion_gate", **exc.result.as_dict()}) \
+                from exc
         except service.StrategyError as exc:
-            from fastapi import HTTPException
-
             raise HTTPException(400, str(exc)) from exc
         await session.commit()
         return {"scope": "strategy", "strategy_id": req.strategy_id, "mode": req.mode}
     try:
         previous = await mode_mod.set_global_mode(session, req.mode, actor="api")
+    except GateNotMet as exc:
+        raise HTTPException(422, detail={"error": "promotion_gate", **exc.result.as_dict()}) from exc
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(400, str(exc)) from exc
     await session.commit()
     return {"scope": "global", "mode": req.mode, "previous": previous}
@@ -301,6 +315,52 @@ async def update_settings(
         await write_audit(session, "ui", "settings.regime_lock", {"mode": mode})
     await session.commit()
     return await get_settings(session)
+
+
+# ── Live execution (Phase 7, doc §9.2–9.5) ────────────────────────────────────
+@router.get("/keys")
+async def get_keys(session: AsyncSession = Depends(get_session)) -> dict:
+    """Masked view of the stored exchange keys — never the plaintext (doc §13)."""
+    from app.core.secrets import get_masked
+
+    return await get_masked(session)
+
+
+@router.post("/keys")
+async def set_keys(req: KeysRequest, session: AsyncSession = Depends(get_session)) -> dict:
+    """Encrypt + store exchange API keys (Settings UI only, doc §13). Returns the mask."""
+    from app.core.secrets import VaultError, store_api_keys
+
+    try:
+        masked = await store_api_keys(
+            session, req.api_key, req.api_secret, testnet=req.testnet
+        )
+    except VaultError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await write_audit(session, "ui", "settings.api_keys", {"testnet": req.testnet, **masked})
+    await session.commit()
+    return masked
+
+
+@router.get("/gate")
+async def promotion_gate_status(
+    scope: str = Query("global"),
+    strategy_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Live-readiness: whether the promotion gate (§9.5) is open + the metrics behind it."""
+    from app.bot.promotion import evaluate_gate
+
+    result = await evaluate_gate(session, scope, strategy_id)
+    return result.as_dict()
+
+
+@router.get("/tracking")
+async def tracking(session: AsyncSession = Depends(get_session)) -> dict:
+    """Live-vs-paper tracking error for the deviation panel (doc §15/Faz-7)."""
+    from app.bot.tracking import load_tracking_error
+
+    return (await load_tracking_error(session)).as_dict()
 
 
 @router.post("/debug/degrade")

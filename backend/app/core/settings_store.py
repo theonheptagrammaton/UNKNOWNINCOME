@@ -18,6 +18,9 @@ KEY_KILLSWITCH = "killswitch"
 KEY_RISK_LIMITS = "risk_limits"
 KEY_PROMOTION_GATE = "promotion_gate"
 KEY_REGIME_LOCK = "regime_lock"  # {"mode": "off"|"auto"|"trend"|"range"|"trend/high"|…}
+# Encrypted exchange API keys (doc §13, Phase 7). The value stores Fernet
+# ciphertext + non-sensitive metadata (last-4, testnet flag) — never plaintext.
+KEY_API_KEYS = "api_keys"
 
 
 async def get_setting(session: AsyncSession, key: str) -> dict | None:

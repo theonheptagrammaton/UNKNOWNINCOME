@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot import killswitch as ks
-from app.bot.mode import LIVE_ENABLED, get_global_mode, set_global_mode
+from app.bot.mode import get_global_mode, live_enabled, set_global_mode
 from app.core.audit import write_audit
 from app.core.config import settings
 from app.models.strategy import Strategy
@@ -118,30 +118,43 @@ class TelegramBot:
         return "Open positions (paper):\n" + "\n".join(lines)
 
     async def _mode(self, session: AsyncSession, args: list[str]) -> str:
+        from app.bot.promotion import GateNotMet
+
         if not args:
-            return "Usage: /mode paper|off [strategy_id]"
+            return "Usage: /mode paper|off|live [strategy_id]  (live needs the gate, §9.5)"
         target = args[0].lower()
-        if target == "live":
-            if not LIVE_ENABLED:
-                return "Live mode is disabled until Phase 7 (no live adapter)."
-            # two-step confirm reserved for when live lands.
-            if self._pending.get(self.chat_id) != "mode:live":
-                self._pending[self.chat_id] = "mode:live"
-                return "⚠️ Reply '/mode live confirm' to switch global mode to LIVE."
         if target not in ("paper", "off", "live"):
-            return "Usage: /mode paper|off [strategy_id]"
+            return "Usage: /mode paper|off|live [strategy_id]"
 
-        if len(args) >= 2:  # per-strategy switch
-            strategy_id = args[1]
-            try:
+        rest = args[1:]
+        confirm = bool(rest) and rest[-1].lower() == "confirm"
+        if confirm:
+            rest = rest[:-1]
+        strategy_id = rest[0] if rest else None
+
+        # LIVE is a deliberate, two-step action even before the numeric gate runs.
+        if target == "live":
+            if not live_enabled():
+                return "Live trading is disabled server-side (LIVE_TRADING_ENABLED=false)."
+            pend = f"mode:live:{strategy_id or 'global'}"
+            if not confirm and self._pending.get(self.chat_id) != pend:
+                self._pending[self.chat_id] = pend
+                suffix = f"{strategy_id} " if strategy_id else ""
+                scope = f"strategy {strategy_id[:8]}" if strategy_id else "global mode"
+                return f"⚠️ Reply '/mode live {suffix}confirm' to switch {scope} to LIVE."
+
+        try:
+            if strategy_id:  # per-strategy switch
                 await strategy_service.set_mode(session, strategy_id, target, actor="telegram")
-            except Exception as exc:
-                return f"Could not set strategy mode: {exc}"
-            return f"Strategy {strategy_id[:8]} → {target.upper()}"
-
-        previous = await set_global_mode(session, target, actor="telegram")
-        self._pending.pop(self.chat_id, None)
-        return f"Global mode {previous.upper()} → {target.upper()}"
+                self._pending.pop(self.chat_id, None)
+                return f"Strategy {strategy_id[:8]} → {target.upper()}"
+            previous = await set_global_mode(session, target, actor="telegram")
+            self._pending.pop(self.chat_id, None)
+            return f"Global mode {previous.upper()} → {target.upper()}"
+        except GateNotMet as exc:
+            return f"⛔ Promotion gate not met (§9.5): {exc}"
+        except Exception as exc:  # noqa: BLE001 - surface the reason to the operator
+            return f"Could not set mode: {exc}"
 
     async def _kill(self, session: AsyncSession, args: list[str]) -> str:
         confirm = args and args[0].lower() == "confirm"

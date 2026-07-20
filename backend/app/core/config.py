@@ -44,6 +44,27 @@ class Settings(BaseSettings):
     binance_api_secret: str = ""
     binance_testnet: bool = False
 
+    # ─── Live execution (Phase 7, doc §9.2–9.5) ───────────────────────────
+    # The whole live-order path is closed by default. Even with this on, an
+    # effective-Live strategy only reaches the exchange once the promotion gate
+    # (§9.5) passes — enforced at the API, mode and engine layers alike.
+    live_trading_enabled: bool = False
+    # Mainnet is a second, deliberate switch: testnet first (rule: "önce testnet,
+    # config ile mainnet"). Live keys go to the testnet by default.
+    live_use_mainnet: bool = False
+    # Fernet master key for the encrypted API-key vault (doc §13). Empty ⇒ the
+    # vault refuses to store/read keys (no plaintext fallback in the DB).
+    secrets_key: str = ""
+    # Isolated margin + one-way mode are pazarlıksız (rule #11); exposed only so
+    # a test can assert the defaults, not to invite cross-margin.
+    live_margin_mode: str = "isolated"
+    live_position_mode: str = "oneway"
+    # Exchange-resilience knobs (retry + circuit breaker, §9.2 dayanıklılık).
+    live_max_retries: int = 3
+    live_retry_backoff_seconds: float = 0.5
+    live_circuit_breaker_threshold: int = 5  # consecutive failures ⇒ open
+    live_circuit_breaker_cooldown_seconds: float = 60.0
+
     # Dynamic universe (doc §4.5).
     universe_size: int = 30
     universe_quote: str = "USDT"

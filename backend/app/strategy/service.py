@@ -209,12 +209,21 @@ async def create_from_scan_entry(
 async def set_mode(
     session: AsyncSession, strategy_id: str, mode: str, actor: str = "api"
 ) -> Strategy:
-    """Set a strategy's mode switch (off/paper/live); records an audit row (doc §9.6)."""
+    """Set a strategy's mode switch (off/paper/live); records an audit row (doc §9.6).
+
+    LIVE is guarded by the promotion gate (§9.5): raises
+    :class:`~app.bot.promotion.GateNotMet` if the strategy's paper record has not
+    cleared the thresholds (or the live infrastructure is not ready).
+    """
     if mode not in MODE_ORDER:
         raise StrategyError(f"invalid mode: {mode!r}")
     strategy = await session.get(Strategy, strategy_id)
     if strategy is None:
         raise StrategyError(f"unknown strategy: {strategy_id!r}")
+    if mode == "live":
+        from app.bot.promotion import assert_can_go_live
+
+        await assert_can_go_live(session, "strategy", strategy_id)
     previous = strategy.mode
     strategy.mode = mode
     await write_audit(

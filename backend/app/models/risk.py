@@ -36,6 +36,7 @@ RISK_TYPES = (
     "leverage_cap",
     "liq_buffer",
     "insufficient_equity",
+    "reconcile",  # live venue vs local state divergence (doc §9.2, Phase 7)
 )
 
 

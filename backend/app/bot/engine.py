@@ -32,7 +32,7 @@ from app.backtest.config import RunConfig
 from app.backtest.engine import _atr
 from app.backtest.runner import _indicator_frames
 from app.bot.killswitch import KillSwitch
-from app.bot.mode import effective_mode, get_global_mode, should_trade
+from app.bot.mode import effective_mode, execution_mode, get_global_mode, live_enabled, should_trade
 from app.bot.notifier import NullNotifier
 from app.bot.signals import LatestSignal, evaluate_latest
 from app.core.clock import Clock, now_ms
@@ -91,8 +91,15 @@ class BotEngine:
         self._tick_seconds = tick_seconds or settings.bot_tick_seconds
         self._kill_poll = kill_poll_seconds or settings.bot_killswitch_poll_seconds
         cash = initial_cash if initial_cash is not None else settings.bot_paper_initial_cash
+        self._limits = limits or RiskLimits()
         self._adapter = PaperAdapter(cash)
-        self._risk = RiskLayer(self._adapter, limits or RiskLimits(), mode="paper", clock=clock)
+        self._risk = RiskLayer(self._adapter, self._limits, mode="paper", clock=clock)
+        # Live wall (Phase 7, doc §9.2–9.5) — built lazily and only when the config
+        # master switch is on, keys are stored and the promotion gate opens. Until
+        # then it stays None and every effective-live strategy executes on paper.
+        self._live_adapter: object | None = None
+        self._live_risk: RiskLayer | None = None
+        self._live_checked_ts = 0  # throttle the (async, DB-hitting) readiness check
         self._processed: dict[str, int] = {}  # key → last bar ts acted on
         self._bands: dict[str, tuple[float | None, float | None, str]] = {}  # stop,target,side
         self._last_funding_ts: dict[str, int] = {}
@@ -134,7 +141,10 @@ class BotEngine:
         self._rehydrated = True
 
     def reload_limits(self, limits: RiskLimits) -> None:
+        self._limits = limits
         self._risk.limits = limits
+        if self._live_risk is not None:
+            self._live_risk.limits = limits
 
     # ── one cycle ────────────────────────────────────────────────────────────
     async def tick(self, session: AsyncSession | None = None) -> TickReport:
@@ -157,10 +167,12 @@ class BotEngine:
         global_mode = await get_global_mode(session)
         report = TickReport(ts=ts, global_mode=global_mode)
 
-        for strat, version, config in await self._load_active(session, global_mode):
+        await self._ensure_live_wall(session, global_mode, ts)
+
+        for strat, version, config, mode in await self._load_active(session, global_mode):
             report.evaluated += 1
             try:
-                await self._evaluate(session, strat, version, config, ts, report)
+                await self._evaluate(session, strat, version, config, ts, report, mode)
             except Exception as exc:  # pragma: no cover - per-strategy resilience
                 logger.warning("strategy %s tick failed: %s", strat.id, exc)
                 report.notes.append(f"{strat.id}:{type(exc).__name__}")
@@ -170,23 +182,124 @@ class BotEngine:
         session.add(
             EquitySnapshot(ts=ts, mode="paper", equity=bal.equity, exposure=self._exposure())
         )
+        # A parallel live snapshot feeds the live-vs-paper tracking error (§Faz-7).
+        if self._live_adapter is not None:
+            try:
+                live_bal = self._live_adapter.get_balance()
+                session.add(EquitySnapshot(
+                    ts=ts, mode="live", equity=live_bal.equity, exposure=self._exposure("live")
+                ))
+            except Exception as exc:  # pragma: no cover - venue read best-effort
+                logger.warning("live equity snapshot skipped: %s", type(exc).__name__)
         return report
+
+    # ── live wall lifecycle (Phase 7, doc §9.2–9.5) ──────────────────────────
+    async def _ensure_live_wall(self, session: AsyncSession, global_mode: str, ts: int) -> None:
+        """Build the live wall iff config on + keys stored + gate open; else tear down.
+
+        Rechecked at most once per minute (the readiness check hits the DB). The gate
+        (§9.5) is enforced here independently of the switch layers — the engine will
+        not construct a path to the venue on its own until every condition holds.
+        """
+        if not live_enabled():
+            self._live_adapter = self._live_risk = None
+            return
+        if self._live_risk is not None and ts - self._live_checked_ts < 60_000:
+            return
+        self._live_checked_ts = ts
+        try:
+            from app.bot.promotion import evaluate_global_gate
+            from app.core.secrets import load_api_keys
+            from app.execution.binance import BinanceFuturesAdapter
+
+            gate = await evaluate_global_gate(session)
+            keys = await load_api_keys(session)
+            if not gate.passed or keys is None:
+                if self._live_risk is not None:
+                    logger.info("live wall stood down: %s", "; ".join(gate.failures) or "no keys")
+                self._live_adapter = self._live_risk = None
+                return
+            if self._live_risk is not None:
+                return  # already built and still eligible
+            adapter = BinanceFuturesAdapter(
+                keys.api_key, keys.api_secret,
+                testnet=keys.testnet or not settings.live_use_mainnet,
+                leverage_default=self._limits.leverage_default,
+            )
+            self._live_adapter = adapter
+            self._live_risk = RiskLayer(adapter, self._limits, mode="live", clock=self._clock)
+            await self._reconcile_live(session, adapter)
+            logger.info("live wall ARMED (testnet=%s)", getattr(adapter, "testnet", "?"))
+        except Exception as exc:  # pragma: no cover - never let live setup crash the tick
+            logger.warning("live wall setup failed: %s", type(exc).__name__)
+            self._live_adapter = self._live_risk = None
+
+    async def _reconcile_live(self, session: AsyncSession, adapter: object) -> None:
+        """Emir-durum mutabakatı (doc §9.2): reconcile venue positions with local state.
+
+        Seeds the adapter's realized-PnL mirror from open live trades, and logs any
+        position the venue holds that we have no open trade for (and vice versa).
+        """
+        open_trades = (
+            await session.execute(
+                select(Trade).where(Trade.mode == "live", Trade.status == "open")
+            )
+        ).scalars().all()
+        local = {t.symbol: t for t in open_trades}
+        for t in open_trades:
+            restore = getattr(adapter, "restore_mirror", None)
+            if callable(restore):
+                restore(t.symbol, t.side, t.qty, t.entry_price)
+        try:
+            venue = {p.symbol: p for p in adapter.get_positions()}
+        except Exception as exc:  # pragma: no cover - venue read best-effort
+            logger.warning("live reconciliation read failed: %s", type(exc).__name__)
+            return
+        for sym in set(local) | set(venue):
+            if sym not in venue:
+                session.add(RiskEvent(
+                    ts=self._clock(), type="reconcile", mode="live", symbol=sym,
+                    detail={"issue": "local_open_no_venue_position"},
+                ))
+            elif sym not in local:
+                session.add(RiskEvent(
+                    ts=self._clock(), type="reconcile", mode="live", symbol=sym,
+                    detail={"issue": "venue_position_no_local_trade",
+                            "qty": venue[sym].qty, "side": venue[sym].side},
+                ))
+        self._seed_live_risk(open_trades)
+
+    def _seed_live_risk(self, open_trades: list[Trade]) -> None:
+        """Seed the live wall's drawdown peak from the last live equity, if any."""
+        if self._live_risk is None:
+            return
+        try:
+            eq = self._live_adapter.get_balance().equity
+            self._live_risk.seed_state(peak_equity=eq)
+        except Exception:  # pragma: no cover - best-effort seed
+            pass
 
     async def _load_active(
         self, session: AsyncSession, global_mode: str
-    ) -> list[tuple[Strategy, StrategyVersion, RunConfig]]:
-        """Strategies whose effective mode ≥ paper, with their active genome (hot-reload).
+    ) -> list[tuple[Strategy, StrategyVersion, RunConfig, str]]:
+        """Tradeable strategies + the mode each executes in (``paper``/``live``).
 
-        Filters out ``pending_approval`` versions (unapproved genomes never trade, §8.5;
-        the active pointer should never reach one, but this is defence in depth) and
+        Effective mode is min(global, strategy) (§9.6); the *execution* mode degrades
+        live→paper unless the live wall is armed (config + keys + gate, §9.5). Filters
+        out ``pending_approval`` versions (unapproved genomes never trade, §8.5) and
         applies the regime gate (§8.4) when a lock is configured.
         """
         strategies = (await session.execute(select(Strategy))).scalars().all()
         lock_mode = await self._regime_lock(session)
-        out: list[tuple[Strategy, StrategyVersion, RunConfig]] = []
+        out: list[tuple[Strategy, StrategyVersion, RunConfig, str]] = []
         for strat in strategies:
             eff = effective_mode(global_mode, strat.mode)
             if not should_trade(eff) or strat.active_version_id is None:
+                continue
+            exec_mode = execution_mode(eff)
+            if exec_mode == "live" and self._live_risk is None:
+                exec_mode = "paper"  # gate/keys not ready → run this strategy on paper
+            if exec_mode == "off":
                 continue
             version = await session.get(StrategyVersion, strat.active_version_id)
             if version is None or version.status in ("retired", "pending_approval"):
@@ -198,8 +311,14 @@ class BotEngine:
                 continue
             if not self._regime_eligible(version, config, lock_mode):
                 continue
-            out.append((strat, version, config))
+            out.append((strat, version, config, exec_mode))
         return out
+
+    def _route(self, mode: str) -> tuple[RiskLayer, object]:
+        """The (risk wall, adapter) pair for an execution mode."""
+        if mode == "live" and self._live_risk is not None:
+            return self._live_risk, self._live_adapter
+        return self._risk, self._adapter
 
     async def _regime_lock(self, session: AsyncSession) -> str:
         """The active regime-lock mode (doc §8.4): off | auto | an explicit regime."""
@@ -248,14 +367,18 @@ class BotEngine:
         config: RunConfig,
         ts: int,
         report: TickReport,
+        mode: str = "paper",
     ) -> None:
+        risk, adapter = self._route(mode)
         ohlcv = query_ohlcv(config.market, config.symbol, config.tf).reset_index(drop=True)
         if len(ohlcv) < 2:
             return
         key = f"{version.id}:{config.symbol}"
         last_bar_ts = int(ohlcv["ts"].iloc[-1])
         close = float(ohlcv["close"].iloc[-1])
-        self._adapter.mark(config.symbol, close)
+        marker = getattr(adapter, "mark", None)
+        if callable(marker):  # paper marks to last close; the venue marks itself
+            marker(config.symbol, close)
 
         # Act once per closed bar (signal at close → fill next tick, rule #1).
         if self._processed.get(key) == last_bar_ts:
@@ -266,9 +389,10 @@ class BotEngine:
         sig = evaluate_latest(config, ohlcv, frames)
         if sig is None:
             return
-        await self._accrue_funding(session, config, ts)
+        if mode == "paper":  # live funding is settled by the venue, not simulated
+            await self._accrue_funding(session, config, ts)
 
-        open_trade = await self._open_trade(session, strat.id, config.symbol)
+        open_trade = await self._open_trade(session, strat.id, config.symbol, mode)
         action, reason = self._decide(config, sig, ohlcv, key, open_trade)
         if action is None:
             return
@@ -283,7 +407,7 @@ class BotEngine:
             ts=ts,
             atr=atr,
             stop_distance=self._stop_distance(config, atr),
-            leverage=config.capital.leverage or self._risk.limits.leverage_default,
+            leverage=config.capital.leverage or risk.limits.leverage_default,
             # Market order fills at the current price, so the reference *is* the last
             # price → the deviation guard only trips on a genuinely stale reference.
             last_price=close,
@@ -292,12 +416,12 @@ class BotEngine:
                 config.costs.slippage_bps if config.costs.slippage_model == "fixed_bps" else None
             ),
         )
-        decision, result = self._risk.submit(intent)
+        decision, result = risk.submit(intent)
 
         # Persist the risk events regardless of outcome (decision-log evidence).
         for ev in decision.events:
             session.add(RiskEvent(
-                ts=ev["ts"], type=ev["type"], mode="paper", symbol=ev["symbol"],
+                ts=ev["ts"], type=ev["type"], mode=mode, symbol=ev["symbol"],
                 strategy_version_id=ev["strategy_version_id"], detail=ev["detail"],
             ))
         if decision.kill:
@@ -309,7 +433,7 @@ class BotEngine:
             ts=sig.ts,
             symbol=config.symbol,
             tf=config.tf,
-            mode="paper",
+            mode=mode,
             action=action,
             reason=reason,
             indicator_snapshot=sig.snapshot,
@@ -323,23 +447,25 @@ class BotEngine:
         if not decision.approved or result is None or not result.accepted:
             report.rejected += 1
             session.add(Order(
-                mode="paper", signal_id=signal.id, strategy_version_id=version.id,
+                mode=mode, signal_id=signal.id, strategy_version_id=version.id,
                 symbol=config.symbol, side=intent.side, qty=decision.qty,
                 status="rejected", detail={"reason": decision.reason},
             ))
             await self._notifier.notify(
-                f"⛔ {config.symbol} {action} rejected by risk: {decision.reason}"
+                f"⛔ {config.symbol} {action} rejected by risk: {decision.reason} ({mode})"
             )
             return
 
         report.orders += 1
         fill = result.fill
         session.add(Order(
-            mode="paper", signal_id=signal.id, strategy_version_id=version.id,
+            mode=mode, signal_id=signal.id, strategy_version_id=version.id,
             symbol=config.symbol, side=intent.side, qty=fill.qty, price=fill.price,
             status="filled", detail={"commission": fill.commission, "slippage": fill.slippage_cost},
         ))
-        await self._apply_fill(session, strat, version, config, action, intent, fill, open_trade)
+        await self._apply_fill(
+            session, strat, version, config, action, intent, fill, open_trade, mode, risk
+        )
 
     def _decide(
         self,
@@ -387,12 +513,15 @@ class BotEngine:
         intent: TradeIntent,
         fill: object,
         open_trade: Trade | None,
+        mode: str = "paper",
+        risk: RiskLayer | None = None,
     ) -> None:
         """Update the trades table + risk feedback + notifications after a fill."""
+        risk = risk or self._risk
         key = f"{version.id}:{config.symbol}"
         if action.startswith("open_"):
             trade = Trade(
-                mode="paper", strategy_version_id=version.id, strategy_id=strat.id,
+                mode=mode, strategy_version_id=version.id, strategy_id=strat.id,
                 symbol=config.symbol, side=intent.position_side, qty=fill.qty,
                 leverage=intent.leverage, entry_price=fill.price, entry_ts=intent.ts,
                 fees=fill.commission, status="open",
@@ -401,7 +530,7 @@ class BotEngine:
             self._set_band(config, intent, key)
             await self._notifier.notify(
                 f"✅ {config.symbol} {intent.position_side} @ {fill.price:.4f} "
-                f"×{fill.qty:.4f} (paper)"
+                f"×{fill.qty:.4f} ({mode})"
             )
         else:  # close
             if open_trade is not None:
@@ -410,12 +539,14 @@ class BotEngine:
                 open_trade.fees += fill.commission
                 open_trade.pnl = fill.realized_pnl - open_trade.fees + open_trade.funding
                 open_trade.status = "closed"
-                self._risk.register_trade_result(open_trade.pnl, intent.ts)
+                risk.register_trade_result(open_trade.pnl, intent.ts)
                 await self._notifier.notify(
                     f"💵 {config.symbol} closed @ {fill.price:.4f} "
-                    f"pnl {open_trade.pnl:+.2f} (paper)"
+                    f"pnl {open_trade.pnl:+.2f} ({mode})"
                 )
-                if self._monitor_degradation:
+                # Degradation monitoring keys off the paper record (§8.5); the live
+                # twin's paper strategy keeps that signal, so only monitor on paper.
+                if self._monitor_degradation and mode == "paper":
                     await self._maybe_degrade(session, strat, version, config)
             self._bands.pop(key, None)
 
@@ -452,8 +583,14 @@ class BotEngine:
             return
         self._kill_handled = True
         self._risk.cancel_all()
+        # The kill switch cancels the venue's resting orders too (doc §9.4).
+        if self._live_risk is not None:
+            try:
+                self._live_risk.cancel_all()
+            except Exception as exc:  # pragma: no cover - venue best-effort
+                logger.warning("live cancel_all on kill failed: %s", type(exc).__name__)
         session.add(RiskEvent(ts=ts, type="killswitch", mode="paper", detail={"engaged": True}))
-        await self._notifier.notify("🛑 KILL SWITCH engaged — new orders halted (paper)")
+        await self._notifier.notify("🛑 KILL SWITCH engaged — new orders halted")
         await session.commit()
 
     async def _trigger_kill(self, session: AsyncSession, ts: int, reason: str) -> None:
@@ -465,13 +602,13 @@ class BotEngine:
 
     # ── helpers ──────────────────────────────────────────────────────────────
     async def _open_trade(
-        self, session: AsyncSession, strategy_id: str, symbol: str
+        self, session: AsyncSession, strategy_id: str, symbol: str, mode: str = "paper"
     ) -> Trade | None:
         return (
             await session.execute(
                 select(Trade)
                 .where(Trade.strategy_id == strategy_id, Trade.symbol == symbol,
-                       Trade.mode == "paper", Trade.status == "open")
+                       Trade.mode == mode, Trade.status == "open")
                 .order_by(Trade.entry_ts.desc())
                 .limit(1)
             )
@@ -553,8 +690,15 @@ class BotEngine:
             )
         ).scalar_one_or_none()
 
-    def _exposure(self) -> float:
-        return sum(p.qty * (p.mark_price or p.entry_price) for p in self._adapter.get_positions())
+    def _exposure(self, mode: str = "paper") -> float:
+        adapter = self._live_adapter if mode == "live" else self._adapter
+        if adapter is None:
+            return 0.0
+        try:
+            positions = adapter.get_positions()
+        except Exception:  # pragma: no cover - venue read best-effort
+            return 0.0
+        return sum(p.qty * (p.mark_price or p.entry_price) for p in positions)
 
     # ── the loop ─────────────────────────────────────────────────────────────
     async def run(
