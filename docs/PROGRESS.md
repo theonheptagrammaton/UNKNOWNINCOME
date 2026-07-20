@@ -80,11 +80,20 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 - **Durum:** `[x]` Tamamlandı (2026-07-20). Kanıt: pytest **155/155** yeşil (46 yeni Faz-5 testi), ruff temiz, `next build` başarılı (/trade 6.24 kB), tsc + eslint temiz. Canlı doğrulama: 5 servis healthy + bot loop çalışıyor → backtest→"Convert to strategy"→paper mod → gerçek paper entry (reason+snapshot dolu, equity komisyon/slippage ile hareket etti) → kill switch (API) engaged+audit → genome hot-reload pozisyonu kapattı. Kararlar: (1) genome = `RunConfig`+ad (backtest'in doğruladığı aynı sinyal yolu); (2) bot worker içinde arka-plan görevi (5 servis korunur); (3) paper fiyatı = son kapanış barı (canlı WS Faz 7); (4) Telegram gerçek polling + 72h/1h soak = operatör plan-B (saf mantık + deterministik soak testli).
 
 ## Faz 6 — Kendini Geliştirme v1
-- [ ] **Kapsam:** Haftalık WFO re-opt zamanlayıcısı, bozulma tetikleyicileri (§8.5), yeni versiyon üretimi + insan onaylı terfi akışı, rejim etiketleme (§8.4).
+- [x] **Kapsam:** Haftalık WFO re-opt zamanlayıcısı, bozulma tetikleyicileri (§8.5), yeni versiyon üretimi + insan onaylı terfi akışı, rejim etiketleme (§8.4).
 - **Kabul kriterleri:**
-  - [ ] Bozulma senaryosu simülasyonunda strateji otomatik pause olur
-  - [ ] Yeni versiyon raporuyla birlikte onaya düşer
-- **Durum:** `[ ]` başlamadı
+  - [x] Bozulma senaryosu simülasyonunda strateji otomatik pause olur — `test_degradation_pauses_and_drops_pending_version` (uçtan uca: pause + pending versiyon + iki bildirim) + `test_debug_degrade_pauses_and_queues_pending` (HTTP `POST /api/bot/debug/degrade` → mode off)
+  - [x] Yeni versiyon raporuyla birlikte onaya düşer — pending versiyon `wfo_report` (OOS + Monte Carlo + plato) taşır; `GET /api/strategies/pending` diff'li onay kuyruğu; `approve → paper` / `reject → retired` (`test_approve_activates_pending_in_paper`, `test_reject_retires_pending_keeps_active`)
+  - [x] **Onaylanmamış versiyon asla işlem üretmez** — `add_version(activate=False)` aktif işaretçiyi oynatmaz + motor `pending_approval` statüsünü atlar (`test_unapproved_version_never_trades`, defense-in-depth dahil)
+  - [x] Zamanlayıcı çalışır (kısaltılmış aralık) — `run_scheduled_reopt` her koşan stratejiyi yeniden optimize eder, çift öneri üretmez (`test_scheduler_produces_pending_versions`); prod'da haftalık cron (Paz 03:00 UTC)
+- **Ek teslimler:**
+  - **Üretici arayüzü** (`strategy/generator.py`): `StrategyGenerator` protokolü + registry; v1 `WalkForwardReoptimizer` (`wfo_reopt`) kayıtlı, **genetic/rl arayüzleri tanımlı ama boş** (`propose` → `NotImplementedError`) — §8.3 "karar değişince yalnızca üretici değişir".
+  - **WFO re-opt v1** (`strategy/reoptimize.py`): registry ParamSpec'leriyle tunable uzay → seed'li Optuna TPE (discovery ile birebir, `n_jobs=1`, deterministik) → genome-düzeyi walk-forward (`rolling_windows`+`monte_carlo`+plato yeniden kullanılır). Aynı seed → aynı parametre (`test_reoptimization_is_deterministic`).
+  - **Bozulma tetikleyicileri** (`strategy/health.py`, §8.5): kayan 30 işlem PF < 1.0 **veya** gerçekleşen drawdown'ın Monte Carlo %95 alt bandını kırması → typed verdict; bot kapanışta izler, degrade → pause + re-opt kuyruğa + Telegram.
+  - **Orkestrasyon** (`strategy/regen.py`): producer → validator → `pending_approval` (aktive edilmeden) → bildirim; `degrade_and_regenerate` senkron uçtan uca.
+  - **Rejim etiketleme** (`strategy/regime.py`, §8.4): saf-numpy ADX + ATR yüzdelik → `trend/range × low/high`; her versiyona etiket; bot havuz kapısı `KEY_REGIME_LOCK` (off/auto/manuel kilit, etiketsiz her zaman uygun) — `test_regime_gate_filters_pool`.
+  - **Test kancası:** `POST /api/bot/debug/degrade` (prod'da 404) bozulmayı zorlar; UI'da "Simulate degrade" + "Re-optimize" düğmeleri, **Approval queue** kartları (rapor + diff + Approve/Reject), Settings'te rejim kilidi şalteri, strateji kartında rejim etiketi.
+- **Durum:** `[x]` Tamamlandı (2026-07-20). Kanıt: pytest **184/184** yeşil (29 yeni Faz-6 testi), ruff temiz, `next build` başarılı (/trade 7.37 kB), tsc + eslint temiz. Kararlar: (1) üretici modüler arayüz arkasında, v1=WFO re-opt, genetic/rl tanımlı-boş; (2) onaylanmamış versiyon `activate=False` + statü guard ile **teknik olarak** işlem yolundan dışlanır; (3) rejim kapısı varsayılan **off** (opt-in) — koşan paper botunu/soak'ı bozmaz, "manuel kilit her zaman mümkün" (§8.4); (4) re-opt worker job'u (degrade) + haftalık cron; manuel tetik senkron API. Genetik üretici (v2) ve gerçek 72h/haftalık cron tetiklemesi operatör/gelecek fazına bırakıldı.
 
 ## Faz 7 — Canlı Yürütme (kapının arkasında)
 - [ ] **Kapsam:** Binance USDT-M futures adaptörü (isolated marj, kaldıraç tavanı, likidasyon tamponu), terfi kapısı (§9.5), mikro sermaye ile kontrollü açılış, canlı-paper sapma izleme.
