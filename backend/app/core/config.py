@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     binance_api_secret: str = ""
     binance_testnet: bool = False
 
+    # ─── Liquidation collector (Faz 8, forward-collect for Faz 11) ────────
+    # !forceOrder@arr websocket → `liquidations` table. Off by default; the
+    # worker launches it when on, or run `python -m app.data.collectors.liquidations`.
+    # This data cannot be backfilled, so start it as early as possible.
+    liquidation_collector_enabled: bool = False
+    liquidation_batch_rows: int = 500  # flush after this many buffered events
+    liquidation_batch_seconds: float = 5.0  # …or this many seconds, whichever first
+
     # ─── Live execution (Phase 7, doc §9.2–9.5) ───────────────────────────
     # The whole live-order path is closed by default. Even with this on, an
     # effective-Live strategy only reaches the exchange once the promotion gate

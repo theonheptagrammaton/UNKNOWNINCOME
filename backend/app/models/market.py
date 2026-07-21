@@ -13,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Float,
     Integer,
     String,
     UniqueConstraint,
@@ -60,6 +61,35 @@ class CandleSyncState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class Liquidation(Base):
+    """A single forced-liquidation order from Binance ``!forceOrder@arr`` (Faz 8).
+
+    This stream **cannot be backfilled** — Binance only pushes it live — so the
+    Phase-8 note has us collecting it now even though nothing reads it until Faz 11.
+    ``dedup_key`` is UNIQUE so a websocket reconnect that replays recent events
+    never double-writes (the collector inserts with ON CONFLICT DO NOTHING).
+    """
+
+    __tablename__ = "liquidations"
+    __table_args__ = (UniqueConstraint("dedup_key", name="uq_liquidation_dedup"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    market: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    # Side of the *liquidation order* the venue submits: SELL = a long got liquidated.
+    side: Mapped[str] = mapped_column(String(8))
+    price: Mapped[float] = mapped_column(Float)
+    avg_price: Mapped[float] = mapped_column(Float)
+    orig_qty: Mapped[float] = mapped_column(Float)  # base units
+    filled_qty: Mapped[float] = mapped_column(Float)  # accumulated filled, base units
+    quote_qty: Mapped[float] = mapped_column(Float)  # ≈ avg_price × filled_qty (USDT)
+    order_status: Mapped[str] = mapped_column(String(16))
+    event_time: Mapped[int] = mapped_column(BigInteger, index=True)  # E, UTC ms
+    trade_time: Mapped[int] = mapped_column(BigInteger)  # T, UTC ms
+    dedup_key: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class UniverseSnapshot(Base):

@@ -6,7 +6,12 @@ from app.models.backtest import BacktestRun
 from app.models.base import Base
 from app.models.discovery import DiscoveryScan
 from app.models.indicator import IndicatorDefinition
-from app.models.market import CandleSyncState, Symbol, UniverseSnapshot
+from app.models.market import (
+    CandleSyncState,
+    Liquidation,
+    Symbol,
+    UniverseSnapshot,
+)
 from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
 from app.models.system import AuditLog, Setting
@@ -20,6 +25,7 @@ __all__ = [
     "DiscoveryScan",
     "EquitySnapshot",
     "IndicatorDefinition",
+    "Liquidation",
     "Order",
     "RiskEvent",
     "Setting",

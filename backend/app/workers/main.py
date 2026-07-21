@@ -45,6 +45,9 @@ async def startup(ctx: dict[str, Any]) -> None:
     if settings.bot_enabled:
         await _start_bot(ctx)
 
+    if settings.liquidation_collector_enabled:
+        await _start_liquidation_collector(ctx)
+
 
 async def _enqueue_reopt(strategy_id: str) -> None:
     """Best-effort enqueue of a degradation-triggered re-optimization (doc §8.5)."""
@@ -87,12 +90,36 @@ async def _start_bot(ctx: dict[str, Any]) -> None:
     logger.info("paper bot loop started")
 
 
+async def _start_liquidation_collector(ctx: dict[str, Any]) -> None:
+    """Launch the ``!forceOrder@arr`` collector as a supervised background task.
+
+    Liquidation data cannot be backfilled (doc §22/§25), so we start collecting the
+    moment the worker comes up. It only accumulates — nothing reads it until Faz 11.
+    """
+    import asyncio
+
+    from app.core.db import SessionLocal
+    from app.data.collectors.liquidations import run_collector
+
+    stop = ctx.setdefault("collector_stop", {"v": False})
+    ctx["liquidation_task"] = asyncio.create_task(
+        run_collector(
+            SessionLocal,
+            stop=lambda: stop["v"],
+            batch_rows=settings.liquidation_batch_rows,
+            batch_seconds=settings.liquidation_batch_seconds,
+        )
+    )
+    logger.info("liquidation collector started")
+
+
 async def shutdown(ctx: dict[str, Any]) -> None:
-    """Signal the bot loop to stop and cancel its background tasks."""
-    stop = ctx.get("bot_stop")
-    if stop is not None:
-        stop["v"] = True
-    for key in ("bot_task", "telegram_task"):
+    """Signal the bot loop + collector to stop and cancel their background tasks."""
+    for flag in ("bot_stop", "collector_stop"):
+        stop = ctx.get(flag)
+        if stop is not None:
+            stop["v"] = True
+    for key in ("bot_task", "telegram_task", "liquidation_task"):
         task = ctx.get(key)
         if task is not None:
             task.cancel()

@@ -117,16 +117,22 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 
 Kapsam ve kabul kriterleri: `docs/PROJE_DOKUMANI-v2.md` §22–§27. Sıra pazarlıksızdır (v2 §29): Faz 8→9→10 çekirdek ve sırayla; 11–13 sonra. **Kural 13:** aşağıdaki hiçbir kutu sentetik veriyle işaretlenemez.
 
-## Faz 8 — Gerçeklik Teması `[ ]`
-- [ ] **Kapsam (§22.1):** Tek satır yeni özellik yok; var olan sistemin gerçek dünyada ne yaptığı ölçülür. Çıktı kod değil **sayılar**. (1) Gerçek veri yüklemesi — `RUNBOOK-faz1-veri.md` sunucuda baştan sona, 10 sembol × 6 TF × 24 ay + funding, `status` çıktısında `gaps=0`. (2) Gerçek 10×4 tarama ölçümü — "< 2 saat" ilk kez gerçekten ölçülür, aşama süreleri kaydedilir. (3) Testnet round trip — `scripts/testnet_smoke.py` gerçek anahtarla, çıktı `RAPOR-faz7.md`'ye. (4) 72 saatlik paper soak — gerçek canlı fiyat akışıyla kesintisiz. (5) Referans strateji karşılaştırması — EMA9×21, RSI aşırı satım dönüşü, Donchian kırılımı gerçek veriyle **buy & hold** ile karşılaştırılır (motorun kalibrasyon çubuğu). **Uyarı:** likidasyon toplayıcısı (Faz 11) geriye dönük indirilemez — Faz 8 sırasında başlat, kullanmasan bile biriktir.
+## Faz 8 — Gerçeklik Teması `[~]`
+- [~] **Kapsam (§22.1):** Tek satır yeni ürün özelliği yok; ölçüm araçları + likidasyon toplayıcısı yazıldı. Çıktı kod değil **sayılar**; sayıları üreten koşular operatör/sunucu adımı (kural 13: sentetik sayı kutu kapatmaz).
+- **Ek teslimler (kod, testli):**
+  - **Likidasyon toplayıcısı** (`data/collectors/liquidations.py` + `models.Liquidation`): `!forceOrder@arr` WS → Postgres `liquidations`, `dedup_key` UNIQUE, ≥500 satır/≥5 sn toplu yazım (`ON CONFLICT DO NOTHING`), kopmada üstel backoff + loglu reconnect. Worker startup'ında (`LIQUIDATION_COLLECTOR_ENABLED`) **veya** `python -m app.data.collectors.liquidations`. **Bugün başlar, sadece biriktirir** (Faz 11 kullanır). 9 test.
+  - **Gerçeklik doğrulayıcı** (`scripts/reality_check.py`): Faz 1–7 kabul kriterlerini gerçek Parquet+DB'ye karşı yeniden koşup tablo basar; çalışamayan kontrol SKIP/ERROR (asla sahte PASS).
+  - **Referans stratejiler** (`scripts/reference_strategies.py`): EMA9×21 · RSI(14) dönüş · Donchian(20) kırılım (Turtle-tarzı, lookahead-güvenli), maliyetler AÇIK, **B&H sütunu**.
+  - **Bellek profili** (`scripts/mem_profile.py`): `ps -o rss=` örnekleme + en küçük kareler eğimi → düz/sızıntı (yeni bağımlılık yok).
+  - Yeni ayarlar §28 sözlüğünde (kural 19); `.env.example` güncel.
 - **Kabul kriterleri (§22.2):**
-  - [ ] `data/status` gerçek veride `gaps=0`, `total_missing=0`.
-  - [ ] Gerçek 10×4 tarama süresi ölçüldü ve raporlandı (2 saati aşıyorsa **aşıyor** diye yazılır, eşik düşürülmez).
-  - [ ] Testnet long+short round trip PASS, venue'nun bildirdiği kaldıraç/marj modu loglandı.
-  - [ ] 72 saat kesintisiz paper koşusu; RSS bellek eğrisi düz; kopma sonrası otomatik yeniden bağlanma loglandı.
-  - [ ] Üç referans strateji gerçek veri sonuçları tabloda; **buy & hold sütunuyla birlikte**.
-  - [ ] `RAPOR-faz8-gerceklik.md` yazıldı: sentetik sayılar ile gerçek sayılar yan yana.
-- **Durum:** `[ ]` Başlamadı.
+  - [ ] `data/status` gerçek veride `gaps=0`, `total_missing=0`. — ⏳ **operatör** (24-ay backfill); `reality_check` doğrular.
+  - [ ] Gerçek 10×4 tarama süresi ölçüldü (>2h ise "aşıyor"). — ⏳ **operatör** (`reality_check --with-scan`); mekanizma + `stage_timings` hazır.
+  - [ ] Testnet long+short round trip PASS + kaldıraç/marj logu. — ⏳ **operatör** (Faz 7'den beri; `testnet_smoke.py` hazır).
+  - [ ] 72 saat kesintisiz paper; RSS düz; kopma+reconnect logda. — ⏳ **operatör** (72h); RSS aracı + reconnect mantığı testli.
+  - [ ] Üç referans strateji gerçek veri tablosu + **B&H**. — ⏳ **operatör** (gerçek veri); araç + sentetik koşu kanıtlı, B&H'i yenmesi beklenmiyor.
+  - [x] `RAPOR-faz8-gerceklik.md` yazıldı: sentetik | gerçek yan yana.
+- **Durum:** `[~]` **Kod tamam, gerçek-veri sayıları operatörde** (2026-07-21). Kanıt: pytest **241/241** yeşil (+9 collector), ruff temiz. Kararlar: (1) collector Postgres tablo + worker startup + standalone giriş (kullanıcı onaylı); (2) Donchian `line_cross(close,dcu)` yapısal olarak tetiklenmez → Turtle-tarzı band_touch (yeni N-bar yüksek/düşük), lookahead-güvenli; (3) referans koşu fixed full-deployment boyutlama (B&H ile aynı zemin); (4) gerçek sayılar sahteleştirilmedi — ⏳ operatör runbook `RAPOR-faz8-gerceklik.md §6`. **Kalan:** backfill → reality_check → testnet_smoke → 72h soak → referans tablosu; sonuçlar RAPOR'a olduğu gibi yazılır, tag güncellenir.
 
 ## Faz 9 — İstatistiksel Dürüstlük Katmanı `[ ]`
 - [ ] **Kapsam (§23):** v1.1 §6.5-5'in ertelediği çoklu-test borcu kapanır. Deney kütüğü (`research/registry.py`, append-only, tarama üstü, genome ailesi bazında `trials_total`), Deflated Sharpe Ratio (`research/deflation.py`, Bailey & López de Prado 2014), PBO/CSCV (`research/pbo.py`, S=16). Aşama 5.5 — Deflasyon kapısı (WFO'dan sonra, pazarlıksız): `DSR<0.95 → REDDET`, `PBO≥0.40 → REDDET`, `OOS işlem<30 → REDDET`, `OOS getiri≤B&H → REDDET`; config'ten gevşetilemez, yalnızca kod + `audit_log`.

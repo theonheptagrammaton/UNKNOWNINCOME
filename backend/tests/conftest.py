@@ -23,12 +23,28 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest_asyncio.fixture
-async def db_session(tmp_path: Path) -> AsyncIterator[AsyncSession]:
-    """A SQLite-backed async session with the schema created."""
+async def _db_engine(tmp_path: Path) -> AsyncIterator[object]:
+    """A SQLite-backed async engine with the schema created (shared per test)."""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/test.db")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(_db_engine: object) -> AsyncIterator[AsyncSession]:
+    """A SQLite-backed async session over the shared engine."""
+    session_factory = async_sessionmaker(_db_engine, expire_on_commit=False)  # type: ignore[arg-type]
     async with session_factory() as session:
         yield session
-    await engine.dispose()
+
+
+@pytest.fixture
+def db_session_factory(_db_engine: object) -> async_sessionmaker[AsyncSession]:
+    """A session *factory* over the same engine as :func:`db_session`.
+
+    Lets a test drive code that opens its own short-lived sessions (e.g. the
+    liquidation collector's batch writer) while asserting via ``db_session``.
+    """
+    return async_sessionmaker(_db_engine, expire_on_commit=False)  # type: ignore[arg-type]

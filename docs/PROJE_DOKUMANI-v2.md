@@ -558,6 +558,14 @@ Dört kuşağa ayrılmıştır. **Birinci kuşağa dokunmak için sebep gerekir.
 | `allocation_max_step` (%20) | Tahsis değişim hızı | Daha çevik, daha oynak | Daha yavaş tepki, daha istikrarlı |
 | `auto_approve` (kapalı) | İnsan onayı | **Açmak = sistemi tamamen serbest bırakmak.** Faz 13 üç ay sorunsuz koşmadan açma | Her değişiklik senin onayından geçer |
 
+#### Kuşak 5 — Veri toplama (Faz 8)
+
+| Ayar | Ne yapar | Yükseltirsen | Düşürürsen |
+|---|---|---|---|
+| `liquidation_collector_enabled` (kapalı) | `!forceOrder@arr` likidasyon WS toplayıcısını worker'da başlatır | Açarsan bugünden itibaren likidasyon verisi birikir (**geriye dönük indirilemez**, erken aç) | Kapalıysa hiç toplanmaz; sonradan o boşluk asla doldurulamaz |
+| `liquidation_batch_rows` (500) | Kaç olay biriktikten sonra toplu yazılır | Daha büyük parti, daha az DB yazımı, kopmada daha çok risk | Daha sık yazım, daha az bellek, daha çok DB trafiği |
+| `liquidation_batch_seconds` (5) | En geç kaç saniyede bir toplu yazılır | Yazımlar seyrekleşir; düşük hacimde tampon uzun bekler | Daha taze veri, daha sık küçük yazım |
+
 ### 28.3 Karar anlatıcısı
 
 `reason` alanı bugün JSON. UI ve Telegram için düz cümleye çevrilir:
