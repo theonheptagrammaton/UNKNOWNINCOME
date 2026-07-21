@@ -113,6 +113,72 @@ Fazlar ve kabul kriterleri: `docs/PROJE_DOKUMANI.md` §15. Kabul kriterleri geç
 
 ---
 
+# v2 — Gerçeklik, Dürüstlük, Portföy
+
+Kapsam ve kabul kriterleri: `docs/PROJE_DOKUMANI-v2.md` §22–§27. Sıra pazarlıksızdır (v2 §29): Faz 8→9→10 çekirdek ve sırayla; 11–13 sonra. **Kural 13:** aşağıdaki hiçbir kutu sentetik veriyle işaretlenemez.
+
+## Faz 8 — Gerçeklik Teması `[ ]`
+- [ ] **Kapsam (§22.1):** Tek satır yeni özellik yok; var olan sistemin gerçek dünyada ne yaptığı ölçülür. Çıktı kod değil **sayılar**. (1) Gerçek veri yüklemesi — `RUNBOOK-faz1-veri.md` sunucuda baştan sona, 10 sembol × 6 TF × 24 ay + funding, `status` çıktısında `gaps=0`. (2) Gerçek 10×4 tarama ölçümü — "< 2 saat" ilk kez gerçekten ölçülür, aşama süreleri kaydedilir. (3) Testnet round trip — `scripts/testnet_smoke.py` gerçek anahtarla, çıktı `RAPOR-faz7.md`'ye. (4) 72 saatlik paper soak — gerçek canlı fiyat akışıyla kesintisiz. (5) Referans strateji karşılaştırması — EMA9×21, RSI aşırı satım dönüşü, Donchian kırılımı gerçek veriyle **buy & hold** ile karşılaştırılır (motorun kalibrasyon çubuğu). **Uyarı:** likidasyon toplayıcısı (Faz 11) geriye dönük indirilemez — Faz 8 sırasında başlat, kullanmasan bile biriktir.
+- **Kabul kriterleri (§22.2):**
+  - [ ] `data/status` gerçek veride `gaps=0`, `total_missing=0`.
+  - [ ] Gerçek 10×4 tarama süresi ölçüldü ve raporlandı (2 saati aşıyorsa **aşıyor** diye yazılır, eşik düşürülmez).
+  - [ ] Testnet long+short round trip PASS, venue'nun bildirdiği kaldıraç/marj modu loglandı.
+  - [ ] 72 saat kesintisiz paper koşusu; RSS bellek eğrisi düz; kopma sonrası otomatik yeniden bağlanma loglandı.
+  - [ ] Üç referans strateji gerçek veri sonuçları tabloda; **buy & hold sütunuyla birlikte**.
+  - [ ] `RAPOR-faz8-gerceklik.md` yazıldı: sentetik sayılar ile gerçek sayılar yan yana.
+- **Durum:** `[ ]` Başlamadı.
+
+## Faz 9 — İstatistiksel Dürüstlük Katmanı `[ ]`
+- [ ] **Kapsam (§23):** v1.1 §6.5-5'in ertelediği çoklu-test borcu kapanır. Deney kütüğü (`research/registry.py`, append-only, tarama üstü, genome ailesi bazında `trials_total`), Deflated Sharpe Ratio (`research/deflation.py`, Bailey & López de Prado 2014), PBO/CSCV (`research/pbo.py`, S=16). Aşama 5.5 — Deflasyon kapısı (WFO'dan sonra, pazarlıksız): `DSR<0.95 → REDDET`, `PBO≥0.40 → REDDET`, `OOS işlem<30 → REDDET`, `OOS getiri≤B&H → REDDET`; config'ten gevşetilemez, yalnızca kod + `audit_log`.
+- **Kabul kriterleri (§23.6):**
+  - [ ] **Gürültü testi (en önemli kriter):** aynı volatilite/otokorelasyona sahip **rastgele yürüyüş** serisi üretilir; tam keşif hattı koşturulur; sonuç **sıfır aday**. Bir tane bile çıkarsa faz kapanmaz.
+  - [ ] Aynı stratejiyi 50 kez yeniden optimize etmek DSR'ını düşürür (deneme sayacı çalışıyor).
+  - [ ] Liderlik tablosunda her satır: ham Sharpe · DSR · PBO · trials_total · B&H farkı.
+  - [ ] Ham Sharpe'ı yüksek ama DSR'ı düşük bir stratejinin terfi ettirilemediği testle kanıtlı.
+  - [ ] Faz 8'in üç referans stratejisi bu kapıdan geçirilir; geçemezlerse **geçemedikleri yazılır**.
+- **Durum:** `[ ]` Başlamadı.
+
+## Faz 10 — Portföy Katmanı `[ ]`
+- [ ] **Kapsam (§24):** Yeni modül `backend/app/portfolio/` (`correlation.py`, `allocation.py`, `netting.py`, `limits.py`, `service.py`). Strateji getiri serileri arası kayan 90g Pearson korelasyonu + korelasyon kapısı (`|ρ|>0.70` → red veya orantılı kısıntı). Tahsis motoru: eşit risk (varsayılan) · ters volatilite · çeyrek Kelly (tavanlı, tam Kelly asla) · manuel kilit. Sembol bazında netleştirme (risk bir kez, PnL orantılı atıf). Portföy limitleri (günlük %3, toplam DD %12 → kill, net sembol %35, brüt kaldıraç 3x, tek-yön %60, aktif strateji 3–8). Yeni UI paneli: Portfolio.
+- **Kabul kriterleri (§24.7):**
+  - [ ] **Klon testi:** birebir aynı iki strateji canlıya alınır; toplam tahsisleri tek stratejinin tahsisine **eşit** olur (iki katı değil).
+  - [ ] İki strateji aynı sembolde aynı yönde sinyal → borsada tek pozisyon, risk bir kez, PnL orantılı atfedilir.
+  - [ ] Portföy DD limiti, hiçbir strateji kendi limitini aşmamışken tetiklenebilir (testle).
+  - [ ] Korelasyonu 0.85 olan yeni strateji, tahsis kısıtıyla veya reddiyle karşılanır.
+  - [ ] Brüt kaldıraç 3x'i aşacak emir reddedilir ve `risk_events`'e düşer.
+- **Durum:** `[ ]` Başlamadı.
+
+## Faz 11 — Alfa Yüzeyini Genişletme `[ ]`
+- [ ] **Kapsam (§25):** Alfa yüzeyi OHLCV dışına açılır. Bedava taker akışı: `taker_buy_base_volume` + `number_of_trades` Parquet'e yazılır (`flow_imbalance`, `avg_trade_size`). Yeni kaynaklar: açık pozisyon (OI, 5 dk REST), funding vade yapısı (değişim + uçlar), likidasyon akışı (WS `!forceOrder@arr` — **geriye dönük toplanamaz, Faz 8'de başlat**). Dört yeni sinyal primitifi: `flow_imbalance`, `oi_divergence`, `funding_extreme`, `liq_cascade` — registry'ye normal indikatör gibi girer, Faz 9 kapısına normal gibi takılır.
+- **Kabul kriterleri (§25.5):**
+  - [ ] `taker_buy_base_volume` ve `number_of_trades` Parquet şemasında; 24 aylık geçmiş için yeniden indirildi.
+  - [ ] OI toplayıcısı 5 dakikada bir yazıyor; gap taraması OHLCV'yle aynı disiplinde.
+  - [ ] Likidasyon WS toplayıcısı systemd altında; kopma sonrası otomatik yeniden bağlanma; `dedup_key UNIQUE` çift kayıt engelliyor.
+  - [ ] Dört yeni primitif birim testli ve **lookahead-güvenli** (Faz 2 property test deseni).
+  - [ ] Yeni primitiflerle koşulan tarama gürültü testinden geçiyor (kural 15).
+- **Durum:** `[ ]` Başlamadı.
+
+## Faz 12 — Yürütme Kalitesi ve Kapasite `[ ]`
+- [ ] **Kapsam (§26):** Slippage öğrenilir, varsayılmaz (`execution/slippage_model.py`, kova bazında `(sembol,TF,emir_dilimi,vol_dilimi)`, N≥50 dolumdan sonra backtest öğrenilmiş modeli kullanır; varsayımdan kötüyse geçmiş backtestler yeniden koşulur). Kapasite tahmini (`katilim_orani = emir/bar_hacmi`, tavan %1, her strateji kartında "≈ $X'e kadar taşır"). Limit emir desteği (giriş için, `T` sn timeout → market fallback; varsayılan **kapalı**, opt-in, raporda ayrı etiket).
+- **Kabul kriterleri (§26.4):**
+  - [ ] 50+ gerçek dolum sonrası öğrenilmiş slippage modeli devrede; sabit varsayımla farkı raporlanıyor.
+  - [ ] Her strateji kartında kapasite tahmini; katılım oranı %1'i aşan emir reddediliyor.
+  - [ ] Limit emir yolu testli; `T` saniye timeout sonrası market fallback çalışıyor.
+  - [ ] Canlı-paper tracking error, öğrenilmiş model devreye girdikten sonra **daraldı** (ölçüldü).
+- **Durum:** `[ ]` Başlamadı.
+
+## Faz 13 — Kendini Geliştirme v2 (portföy düzeyinde) `[ ]`
+- [ ] **Kapsam (§27):** Gelişme seviye değiştirir: parametreden portföye (genetik arama v2'de **reddedildi** — arama uzayını büyütmek istatistiksel bedeli büyütür). `StrategyGenerator` registry'sine üç üretici: `ScheduledRetirement` (zorunlu emeklilik, yarı ömür 90g), `AllocationLearner` (haftalık, tahsis değişimi ≤ %20), `HypothesisGenerator` (yapılandırılmış hipotez, opsiyonel araştırma rayı). Rejim artık filtre değil **tahsis girdisi** (rejim bazında geçmiş performans, yumuşatılmış geçiş, etiketsiz nötr).
+- **Kabul kriterleri (§27.4):**
+  - [ ] Yarı ömrü dolan strateji, bozulma tetiklenmeden tahsis kaybeder (testle).
+  - [ ] **Erken uyarı testi:** yavaşça bozulan strateji, §8.5 bozulma tetikleyicisi ateşlenmeden **önce** tahsis kaybetmeye başlar.
+  - [ ] Tahsis değişimi tek adımda %20'yi aşamaz.
+  - [ ] Rejim değişimi tahsisi kaydırır; etiketsiz strateji etkilenmez.
+  - [ ] Tüm yeni üreticiler aynı Doğrulayıcı → Terfi kapısı zincirinden geçer (v1 §8.3 mimarisi korundu).
+- **Durum:** `[ ]` Başlamadı.
+
+---
+
 ### Açık kararlar (doküman §16.2) — geliştirmeyi bloklamaz
 | # | Karar | Bloklamayan varsayılan |
 |---|---|---|

@@ -1,6 +1,8 @@
 # UNKNOWNINCOME — Claude Code Hafıza Dosyası
 
-Otonom backtest + trading sistemi. Tam kapsam: `docs/PROJE_DOKUMANI.md` — büyük her karardan önce ilgili bölümünü oku. Fazlar ve kabul kriterleri: doküman §15. Açık kararlar ve varsayılanları: doküman §16.
+Otonom backtest + trading sistemi. Kaynak gerçek: `docs/PROJE_DOKUMANI.md` (v1.1) **+** `docs/PROJE_DOKUMANI-v2.md` (v2 eki — §20–§31, kural 13–20, Faz 8–14; v1.1'i geçersiz kılmaz, üstüne biner). **Çelişkide v2 kazanır.** Büyük her karardan önce ilgili bölümü oku. Fazlar ve kabul kriterleri: v1.1 §15 + v2 §22–§27 (yol haritası v2 §29). Açık kararlar ve varsayılanları: v1.1 §16.
+
+**devseed SENTETİKTİR ve hiçbir kabul kriterini kapatamaz (kural 13).**
 
 ## Stack
 - Backend: Python 3.11+ · FastAPI · arq + Redis · PostgreSQL (uygulama durumu)
@@ -24,6 +26,16 @@ Otonom backtest + trading sistemi. Tam kapsam: `docs/PROJE_DOKUMANI.md` — büy
 10. Açık kararlarda (§16) varsayılanı uygula, alternatifi interface arkasında bırak. Dokümanda cevabı olmayan mimari soruda dur ve sor.
 11. Kaldıraç: sert tavan 10x, güvenli varsayılan 5x, isolated marj; likidasyon fiyatı girişe ≥ 3×ATR mesafede değilse o işlem için otomatik düşür.
 12. Dinamik evren tarihli snapshot'larla saklanır; backtest, test tarihindeki evreni kullanır (survivorship bias yasağı).
+
+### Ek kurallar — v2 §21 (1–12 aynen geçerli, bunlar üstüne biner)
+13. Sentetik veriyle kabul kriteri kapatılamaz. `devseed` bir geliştirme kolaylığıdır, kanıt değil; her kriter gerçek piyasa verisiyle tekrar doğrulanır.
+14. Ham metrik tek başına terfi ettirmez. Her sıralamada ham Sharpe'ın yanında düzeltilmiş (deflated) değer görünür; terfi kararı düzeltilmiş değere bakar. Ham metrik UI'da "ham" etiketi taşır.
+15. Gürültü testi zorunlu ve tekrarlıdır. Keşif hattı düzenli olarak rastgele yürüyüş verisine koşulur; gürültüden aday çıkıyorsa hat bozuktur ve kullanılmaz.
+16. Risk portföy düzeyinde ölçülür. Hiçbir strateji tek başına değerlendirilmez; pozisyonlar sembol bazında netleştirilir; korelasyon bir tahsis girdisidir.
+17. Kapasite bilinmeden ölçek büyütülmez. Her stratejinin doyum büyüklüğü tahmin edilir; tahmin yoksa büyütme yasaktır.
+18. Her strateji ölümlüdür. Tanımlı bir yarı ömrü vardır ve tahsisini periyodik olarak yeniden hak etmek zorundadır.
+19. Her ayar doğal dil açıklamasıyla doğar. Yeni bir config parametresi aynı commit'te §28 sözlüğüne üç satırla yazılır (ne yapar · yükseltirsen · düşürürsen); açıklaması olmayan ayar merge edilmez.
+20. Canlı sapma ölçülmekle kalmaz, kapatılır. Tracking error eşiği aşarsa sistem otomatik Paper'a düşer ve bildirim gönderir.
 
 ## Dizin yapısı
 ```
