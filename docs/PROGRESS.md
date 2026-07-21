@@ -144,15 +144,15 @@ Kapsam ve kabul kriterleri: `docs/PROJE_DOKUMANI-v2.md` §22–§27. Sıra pazar
   - [x] Faz 8'in üç referans stratejisi kapıdan geçirilir (`scripts/reference_gate.py`) — gerçek veri **operatör adımı** (rule #13); veri yokken dürüst **SKIP**, beklenti §22.3: üçü de REDDET.
 - **Durum:** `[x]` Kod + testler tamam (`research/*`, `discovery/deflation_gate.py`, UI, iki script). **267 test geçiyor** (+26 yeni Faz-9), ruff temiz, frontend tsc temiz. Gerçek-veri referans-gate koşusu operatör adımı. Tag: `faz-9`. Rapor: `docs/RAPOR-faz9-deflasyon.md`.
 
-## Faz 10 — Portföy Katmanı `[ ]`
-- [ ] **Kapsam (§24):** Yeni modül `backend/app/portfolio/` (`correlation.py`, `allocation.py`, `netting.py`, `limits.py`, `service.py`). Strateji getiri serileri arası kayan 90g Pearson korelasyonu + korelasyon kapısı (`|ρ|>0.70` → red veya orantılı kısıntı). Tahsis motoru: eşit risk (varsayılan) · ters volatilite · çeyrek Kelly (tavanlı, tam Kelly asla) · manuel kilit. Sembol bazında netleştirme (risk bir kez, PnL orantılı atıf). Portföy limitleri (günlük %3, toplam DD %12 → kill, net sembol %35, brüt kaldıraç 3x, tek-yön %60, aktif strateji 3–8). Yeni UI paneli: Portfolio.
+## Faz 10 — Portföy Katmanı `[x]`
+- [x] **Kapsam (§24):** Yeni modül `backend/app/portfolio/` (`correlation.py`, `allocation.py`, `netting.py`, `limits.py`, `service.py`). Strateji getiri serileri arası kayan 90g Pearson (equity değil — sermaye normalize; paper de matriste) + korelasyon kapısı (`|ρ|>0.70` → orantılı kısıt varsayılan, red operatör seçeneği). Tahsis motoru: eşit-risk (varsayılan, **kovaryans-farkında vol-hedefi**) · ters-vol · çeyrek Kelly (tavanlı, **tam Kelly `ValueError`**) · manuel kilit. Sembol netleştirme (`net_by_symbol`, risk bir kez; `attribute_pnl` orantılı → `trades.attribution`). Portföy limitleri `limits.py` (günlük %3, DD %12 → kill, net sembol %35, brüt 3x, tek-yön net %60, aktif 3–8 uyarı) **RiskLayer'a enjekte, strateji kapılarından ÖNCE**; portföy reddi `risk_events`'e. UI: `PortfolioPanel.tsx` — tahsis halkası · korelasyon ısı haritası (0.70 üstü kırmızı) · net maruziyet çubuğu (tavan çizgisi) · katkı tablosu · düz cümleli uyarılar.
 - **Kabul kriterleri (§24.7):**
-  - [ ] **Klon testi:** birebir aynı iki strateji canlıya alınır; toplam tahsisleri tek stratejinin tahsisine **eşit** olur (iki katı değil).
-  - [ ] İki strateji aynı sembolde aynı yönde sinyal → borsada tek pozisyon, risk bir kez, PnL orantılı atfedilir.
-  - [ ] Portföy DD limiti, hiçbir strateji kendi limitini aşmamışken tetiklenebilir (testle).
-  - [ ] Korelasyonu 0.85 olan yeni strateji, tahsis kısıtıyla veya reddiyle karşılanır.
-  - [ ] Brüt kaldıraç 3x'i aşacak emir reddedilir ve `risk_events`'e düşer.
-- **Durum:** `[ ]` Başlamadı.
+  - [x] **Klon testi:** `test_portfolio_allocation.py::test_clone_total_allocation_equals_single` — ρ=1 iki klonun toplam tahsisi tek stratejininkine eşit (her biri yarısı). Vol-hedefli tahsisin yapısal sonucu.
+  - [x] İki strateji aynı sembol+yön → tek net pozisyon, risk bir kez, PnL orantılı atıf — `test_portfolio_netting.py` + motor kablosu `test_portfolio_attribution.py`.
+  - [x] Portföy DD limiti, hiçbir strateji kendi %15 limitini aşmadan tetiklenir — `test_portfolio_limits.py` + RiskLayer üzerinden `test_portfolio_gate_integration.py::test_portfolio_dd_kills_before_strategy_dd` (`max_drawdown` ateşlemez).
+  - [x] Korelasyonu 0.85 olan yeni strateji tahsis kısıtıyla karşılanır (red değil) — `test_portfolio_service.py::test_correlation_gate_cuts_allocation_for_085_pair` (`factor≈0.5`).
+  - [x] Brüt kaldıraç 3x'i aşacak emir reddedilir + `risk_events` — `test_portfolio_gate_integration.py::test_gross_leverage_over_3x_rejected_and_emits_event` (borsaya emir gitmez, `gross_leverage` olayı).
+- **Durum:** `[x]` Kod + testler tamam (`portfolio/*`, RiskLayer/motor entegrasyonu, UI). **303 test geçiyor** (+33 yeni Faz-10), ruff temiz, frontend tsc temiz. Yapısal tavanlar (%25/%35/3x) kod sabiti; iki yeni ayar §28.2 sözlüğüne, yeni `risk_events` tipleri §28.3'e eklendi (kural 19). Gerçek çok-stratejili canlı havuz sayıları operatör adımı. Tag: `faz-10`. Rapor: `docs/RAPOR-faz10-portfoy.md`.
 
 ## Faz 11 — Alfa Yüzeyini Genişletme `[ ]`
 - [ ] **Kapsam (§25):** Alfa yüzeyi OHLCV dışına açılır. Bedava taker akışı: `taker_buy_base_volume` + `number_of_trades` Parquet'e yazılır (`flow_imbalance`, `avg_trade_size`). Yeni kaynaklar: açık pozisyon (OI, 5 dk REST), funding vade yapısı (değişim + uçlar), likidasyon akışı (WS `!forceOrder@arr` — **geriye dönük toplanamaz, Faz 8'de başlat**). Dört yeni sinyal primitifi: `flow_imbalance`, `oi_divergence`, `funding_extreme`, `liq_cascade` — registry'ye normal indikatör gibi girer, Faz 9 kapısına normal gibi takılır.

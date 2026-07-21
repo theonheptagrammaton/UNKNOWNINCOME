@@ -27,6 +27,14 @@ from pydantic import BaseModel
 from app.core.clock import Clock, now_ms
 from app.execution.base import Balance, OrderRequest, OrderResult, Position
 from app.execution.sizing import position_size
+from app.portfolio.limits import (
+    AddedLeg,
+    PortfolioLimits,
+    PortfolioPosition,
+    PortfolioSnapshot,
+    check_drawdown,
+    check_open,
+)
 
 
 class RiskLimits(BaseModel):
@@ -114,10 +122,14 @@ class RiskLayer:
         *,
         mode: str = "paper",
         clock: Clock = now_ms,
+        portfolio: PortfolioLimits | None = None,
     ) -> None:
         # Name-mangled so the bot cannot reach the adapter to bypass the wall.
         self.__adapter = adapter
         self.limits = limits or RiskLimits()
+        # Portfolio-level limits (doc §24.5) evaluated BEFORE strategy limits. None
+        # ⇒ no portfolio gate (pre-Phase-10 behaviour / unit tests that don't need it).
+        self.portfolio = portfolio
         self.mode = mode
         self._clock = clock
         self._state = _RiskState()
@@ -169,6 +181,14 @@ class RiskLayer:
         self._roll_day(intent.ts, equity)
         self._state.peak_equity = max(self._state.peak_equity, equity)
 
+        # ── Portfolio drawdown FIRST (doc §24.5) — before the strategy DD gate, so
+        # the stricter portfolio 12% ceiling can kill while no strategy hit its 15%.
+        if self.portfolio is not None:
+            pdd = check_drawdown(self.portfolio, self._portfolio_snapshot(equity), intent.ts)
+            if pdd is not None:
+                events.extend(pdd.events)
+                return RiskDecision(False, reason=pdd.reason, events=events, kill=pdd.kill)
+
         # Total drawdown → kill switch (checked for any intent; §9.4).
         if self._state.peak_equity > 0:
             dd = equity / self._state.peak_equity - 1.0
@@ -182,6 +202,16 @@ class RiskLayer:
         # Closing/reducing an existing position is always allowed (it lowers risk).
         if not intent.is_open:
             return RiskDecision(True, qty=self._close_qty(intent), leverage=1.0, events=events)
+
+        # ── Portfolio open-gates (doc §24.5) — BEFORE every strategy limit below:
+        # portfolio daily-loss, net symbol exposure, gross leverage, direction
+        # concentration. A portfolio rejection lands in risk_events like any other.
+        if self.portfolio is not None:
+            added = self._prospective_leg(equity, intent)
+            pdec = check_open(self.portfolio, self._portfolio_snapshot(equity), added, intent.ts)
+            if not pdec.approved:
+                events.extend(pdec.events)
+                return RiskDecision(False, reason=pdec.reason, events=events)
 
         # ── open-only gates ──────────────────────────────────────────────────
         if self._state.halted_day == self._utc_date(intent.ts):
@@ -321,6 +351,48 @@ class RiskLayer:
             if p.symbol == intent.symbol:
                 return p.qty
         return 0.0
+
+    # ── portfolio gate helpers (doc §24.5) ────────────────────────────────────
+    def _portfolio_snapshot(self, equity: float) -> PortfolioSnapshot:
+        """Build the §24.5 portfolio view from the adapter's netted positions.
+
+        All strategies share this adapter, so its positions are already netted by
+        symbol (risk counted once, doc §24.4) and its equity/peak are the *portfolio*
+        equity/peak — which is why the portfolio DD ceiling can trip while no single
+        strategy hit its own limit.
+        """
+        positions = [
+            PortfolioPosition(
+                symbol=p.symbol, side=p.side,
+                notional=abs(p.qty) * (p.mark_price or p.entry_price),
+            )
+            for p in self.__adapter.get_positions()
+        ]
+        return PortfolioSnapshot(
+            equity=equity,
+            peak_equity=self._state.peak_equity,
+            day_start_equity=self._state.daily_start_equity,
+            positions=positions,
+        )
+
+    def _prospective_leg(self, equity: float, intent: TradeIntent) -> AddedLeg:
+        """Size the pending open exactly as it *would* fill, for the gross/symbol gates.
+
+        Uses the same leverage cap + liquidation buffer + sizing the real path uses,
+        but with a throwaway events list — no ``leverage_cap``/``liq_buffer`` event is
+        emitted here; those only fire on the committed sizing if the order survives
+        every gate.
+        """
+        throwaway: list[dict] = []
+        leverage = min(max(intent.leverage, 1.0), self.limits.leverage_cap)
+        leverage = self._apply_liq_buffer(intent, leverage, throwaway)
+        qty = self._size(equity, intent, leverage)
+        return AddedLeg(
+            symbol=intent.symbol,
+            side=intent.position_side,
+            notional=qty * intent.reference_price,
+            strategy_version_id=intent.strategy_version_id,
+        )
 
     def _apply_liq_buffer(
         self, intent: TradeIntent, leverage: float, events: list[dict]

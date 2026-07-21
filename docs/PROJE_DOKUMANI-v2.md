@@ -526,6 +526,8 @@ Dört kuşağa ayrılmıştır. **Birinci kuşağa dokunmak için sebep gerekir.
 |---|---|---|---|
 | `max_total_drawdown_pct` (%15) | Kill switch eşiği | Daha derin batışa izin verirsin | Daha erken durursun; gürültüde de durabilirsin |
 | `portfolio_max_dd_pct` (%12) | Portföy kill eşiği | Aynı, portföy düzeyinde | Aynı, daha temkinli |
+| `portfolio_daily_loss_pct` (%3) | Portföy günlük zarar durdurucu | Portföy günde daha çok kaybedebilir, geç durur | Erken durur; oynak günde de girişleri keser |
+| `portfolio_direction_concentration_pct` (%60) | Net yön (long/short) tavanı | Portföy tek yöne daha çok yaslanabilir | Daha dengeli yön, daha az tek-yön bahsi |
 | `liquidation_buffer_atr` (3) | Likidasyon tamponu | Daha güvenli, daha küçük pozisyon | **Likidasyon riski** — 3'ün altına inme |
 | `leverage_hard_cap` (10x) | Sert kaldıraç tavanı | Likidasyon mesafesi kısalır | Daha güvenli, getiri düşer |
 | `gross_leverage_cap` (3x) | Portföy brüt kaldıracı | Toplam maruziyet artar | Daha az iş, daha az risk |
@@ -579,6 +581,22 @@ Dört kuşağa ayrılmıştır. **Birinci kuşağa dokunmak için sebep gerekir.
 
 {"allocation_change":-0.04,"cause":"underperformance"}
 → "Tahsisi %4 düşürdüm: son 30 işlem doğrulama beklentisinin altında."
+```
+
+Faz 10 portföy kapısının ürettiği `risk_events` tipleri (doc §24.5) da düz cümleye çevrilir:
+
+```
+{"type":"gross_leverage","gross_leverage":3.05,"cap":3.0}
+→ "Reddedildi: portföy brüt kaldıracı 3x tavanını aşacaktı (3.05x)."
+
+{"type":"portfolio_drawdown","drawdown_pct":-12.4,"limit_pct":12.0}
+→ "Kill switch: portföy %12 düşüş tavanını geçti (−%12.4)."
+
+{"type":"direction_concentration","net_directional_pct":68,"cap_pct":60,"side":"long"}
+→ "Yeni long kısıtlandı: portföyün %68'i zaten net long (tavan %60)."
+
+{"type":"correlation_gate","rho":0.85,"factor":0.5}
+→ "Tahsisi yarıya indirdim: mevcut bir stratejiyle %85 korele."
 ```
 
 Her yeni `reason` tipi, çevirmen fonksiyonuyla **aynı commit'te** doğar (kural 19).

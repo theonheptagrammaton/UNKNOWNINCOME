@@ -93,6 +93,10 @@ class Trade(Base):
     funding: Mapped[float] = mapped_column(Float, default=0.0)  # signed
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # net realized
     status: Mapped[str] = mapped_column(String(8), default="open", index=True)  # open|closed
+    # When several strategies net into one exchange position (doc §24.4), the netted
+    # PnL is attributed proportionally here: {strategy_id: pnl_share}. None for a
+    # position held by a single strategy (its own row already carries the full pnl).
+    attribution: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

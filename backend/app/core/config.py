@@ -124,5 +124,18 @@ class Settings(BaseSettings):
     regime_atr_period: int = 14
     regime_atr_high_pct: float = 0.5
 
+    # ── Portfolio layer (doc §24, Faz 10) ────────────────────────────────────
+    # Allocation method (§28.2 Kuşak 2). equal_risk | inverse_vol | kelly | manual.
+    portfolio_allocation_method: str = "equal_risk"
+    # New-strategy correlation gate (§28.2 Kuşak 3). |ρ| above → allocation cut.
+    portfolio_correlation_gate: float = 0.70
+    # Portfolio-level risk limits (§24.5). Structural caps (symbol 35%, gross 3x)
+    # are non-negotiable ceilings; config may only tighten them.
+    portfolio_daily_loss_pct: float = 3.0  # → halt all new entries
+    portfolio_max_dd_pct: float = 12.0  # → kill switch (stricter than strategy 15%)
+    portfolio_max_symbol_exposure_pct: float = 35.0  # net, share of equity
+    portfolio_gross_leverage_cap: float = 3.0  # total notional / equity
+    portfolio_direction_concentration_pct: float = 60.0  # net long|short ≤ this
+
 
 settings = Settings()

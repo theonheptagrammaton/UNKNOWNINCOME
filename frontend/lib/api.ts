@@ -543,10 +543,59 @@ export interface Position {
   strategy_id: string | null;
 }
 
+export interface AllocationRow {
+  strategy_id: string;
+  name: string;
+  target: number;
+  target_share: number;
+}
+
+export interface CorrelationMatrix {
+  labels: string[];
+  ids?: string[];
+  matrix: number[][];
+}
+
+export interface CorrelationGateRow {
+  strategy_id: string;
+  name: string;
+  peer: string | null;
+  rho: number;
+  gated: boolean;
+  factor: number;
+}
+
+export interface NetExposureRow {
+  symbol: string;
+  net_pct: number;
+  side: string;
+  cap_pct: number;
+}
+
+export interface ContributionRow {
+  strategy_id: string;
+  name: string;
+  mode: string;
+  weight: number;
+  return_contribution: number;
+  risk_contribution: number;
+  vol: number;
+}
+
 export interface Portfolio {
   positions: Position[];
   equity: number | null;
   exposure: number;
+  // Portfolio layer (doc §24.6). Present since Phase 10; older/degraded responses
+  // may omit them, so the panel treats each as optional.
+  allocations?: AllocationRow[];
+  correlation?: CorrelationMatrix;
+  correlation_gate?: { threshold: number; rows: CorrelationGateRow[] };
+  net_exposure?: NetExposureRow[];
+  contributions?: ContributionRow[];
+  concentration_warnings?: string[];
+  caps?: Record<string, number>;
+  method?: string;
 }
 
 export type ReasonClause = { primitive: string; args: Record<string, unknown> };

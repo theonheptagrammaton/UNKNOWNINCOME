@@ -24,6 +24,7 @@ import { fmtDateTime, fmtMoney, fmtNum } from "@/lib/format";
 
 import { ApprovalPanel } from "./ApprovalPanel";
 import { GatePanel } from "./GatePanel";
+import { PortfolioPanel } from "./PortfolioPanel";
 import { StrategyPanel } from "./StrategyPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { TrackingPanel } from "./TrackingPanel";
@@ -206,49 +207,6 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: s
       <span className="text-[11px] uppercase tracking-wider text-fog-faint">{label}</span>
       <span className={`text-lg font-semibold tabular-nums ${tone ?? "text-fog"}`}>{value}</span>
     </div>
-  );
-}
-
-// ── Portfolio ─────────────────────────────────────────────────────────────────
-function PortfolioPanel({ portfolio }: { portfolio: Portfolio | null }) {
-  const positions = portfolio?.positions ?? [];
-  return (
-    <Panel title="Portfolio" hint={`${positions.length} open`}>
-      {positions.length === 0 ? (
-        <p className="text-sm text-fog-faint">No open positions.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[480px] text-left text-sm">
-            <thead className="text-[11px] uppercase tracking-wider text-fog-faint">
-              <tr>
-                <th className="py-1.5 pr-3">Symbol</th>
-                <th className="py-1.5 pr-3">Side</th>
-                <th className="py-1.5 pr-3 text-right">Qty</th>
-                <th className="py-1.5 pr-3 text-right">Entry</th>
-                <th className="py-1.5 pr-3 text-right">Lev</th>
-              </tr>
-            </thead>
-            <tbody className="text-fog-muted">
-              {positions.map((p, i) => (
-                <tr key={i} className="border-t border-line">
-                  <td className="py-1.5 pr-3 font-mono text-fog">{p.symbol}</td>
-                  <td
-                    className={`py-1.5 pr-3 uppercase ${
-                      p.side === "long" ? "text-profit" : "text-loss"
-                    }`}
-                  >
-                    {p.side}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">{fmtNum(p.qty, 4)}</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">{fmtNum(p.entry_price, 2)}</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">{fmtNum(p.leverage, 1)}×</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Panel>
   );
 }
 
@@ -447,15 +405,14 @@ export function TradeDeck() {
 
       <StrategyPanel strategies={strategies} signals={signals} onChange={refresh} />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <PortfolioPanel portfolio={portfolio} />
-        <SignalFeed signals={signals} />
-      </div>
+      <PortfolioPanel portfolio={portfolio} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <SignalFeed signals={signals} />
         <DecisionLog decisions={decisions} />
-        <SettingsPanel />
       </div>
+
+      <SettingsPanel />
     </div>
   );
 }

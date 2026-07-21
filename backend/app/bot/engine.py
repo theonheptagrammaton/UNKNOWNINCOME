@@ -44,6 +44,8 @@ from app.execution.risk import RiskLayer, RiskLimits, TradeIntent
 from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
 from app.models.trading import EquitySnapshot, Order, Signal, Trade
+from app.portfolio.limits import PortfolioLimits
+from app.portfolio.netting import Leg, attribute_pnl
 from app.strategy.genome import genome_config
 from app.strategy.health import evaluate_degradation
 from app.strategy.regen import pause_for_degradation
@@ -92,8 +94,21 @@ class BotEngine:
         self._kill_poll = kill_poll_seconds or settings.bot_killswitch_poll_seconds
         cash = initial_cash if initial_cash is not None else settings.bot_paper_initial_cash
         self._limits = limits or RiskLimits()
+        # Portfolio-level limits (doc §24.5) — injected into every wall so they run
+        # before strategy limits. Structural caps are the doc defaults; config may
+        # only tighten (see core/config.py).
+        self._portfolio_limits = PortfolioLimits(
+            daily_loss_pct=settings.portfolio_daily_loss_pct,
+            max_dd_pct=settings.portfolio_max_dd_pct,
+            max_symbol_exposure_pct=settings.portfolio_max_symbol_exposure_pct,
+            gross_leverage_cap=settings.portfolio_gross_leverage_cap,
+            direction_concentration_pct=settings.portfolio_direction_concentration_pct,
+        )
         self._adapter = PaperAdapter(cash)
-        self._risk = RiskLayer(self._adapter, self._limits, mode="paper", clock=clock)
+        self._risk = RiskLayer(
+            self._adapter, self._limits, mode="paper", clock=clock,
+            portfolio=self._portfolio_limits,
+        )
         # Live wall (Phase 7, doc §9.2–9.5) — built lazily and only when the config
         # master switch is on, keys are stored and the promotion gate opens. Until
         # then it stays None and every effective-live strategy executes on paper.
@@ -227,7 +242,10 @@ class BotEngine:
                 leverage_default=self._limits.leverage_default,
             )
             self._live_adapter = adapter
-            self._live_risk = RiskLayer(adapter, self._limits, mode="live", clock=self._clock)
+            self._live_risk = RiskLayer(
+                adapter, self._limits, mode="live", clock=self._clock,
+                portfolio=self._portfolio_limits,
+            )
             await self._reconcile_live(session, adapter)
             logger.info("live wall ARMED (testnet=%s)", getattr(adapter, "testnet", "?"))
         except Exception as exc:  # pragma: no cover - never let live setup crash the tick
@@ -543,6 +561,7 @@ class BotEngine:
                 open_trade.fees += fill.commission
                 open_trade.pnl = fill.realized_pnl - open_trade.fees + open_trade.funding
                 open_trade.status = "closed"
+                await self._attribute_shared(session, open_trade, config.symbol, mode)
                 risk.register_trade_result(open_trade.pnl, intent.ts)
                 await self._notifier.notify(
                     f"💵 {config.symbol} closed @ {fill.price:.4f} "
@@ -553,6 +572,40 @@ class BotEngine:
                 if self._monitor_degradation and mode == "paper":
                     await self._maybe_degrade(session, strat, version, config)
             self._bands.pop(key, None)
+
+    async def _attribute_shared(
+        self, session: AsyncSession, closing: Trade, symbol: str, mode: str
+    ) -> None:
+        """Proportional PnL attribution when >1 strategy shares a symbol (doc §24.4).
+
+        The exchange holds one netted position per symbol; when this leg closes and
+        other strategies still hold the same symbol, record how this realized PnL maps
+        across the co-holders (``trades.attribution``). A single-strategy symbol leaves
+        ``attribution`` None — its own row already carries the full PnL.
+        """
+        if closing.pnl is None:
+            return
+        coholders = (
+            await session.execute(
+                select(Trade).where(
+                    Trade.symbol == symbol, Trade.mode == mode,
+                    Trade.status == "open", Trade.id != closing.id,
+                    Trade.strategy_id != closing.strategy_id,
+                )
+            )
+        ).scalars().all()
+        if not coholders:
+            return
+        legs = [
+            Leg(
+                strategy_id=t.strategy_id or t.id, symbol=symbol, side=t.side,
+                notional=abs(t.qty) * t.entry_price,
+            )
+            for t in (closing, *coholders)
+        ]
+        closing.attribution = {
+            sid: round(v, 6) for sid, v in attribute_pnl(closing.pnl, legs).items()
+        }
 
     async def _maybe_degrade(
         self,

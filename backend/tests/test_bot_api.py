@@ -103,6 +103,18 @@ async def test_invalid_mode_rejected(client) -> None:
     assert (await c.post("/api/bot/mode", json={"mode": "banana"})).status_code == 400
 
 
+async def test_portfolio_endpoint_has_panel_sections(client) -> None:
+    """/api/bot/portfolio carries the doc §24.6 panel sections (Phase 10)."""
+    c, _ = client
+    body = (await c.get("/api/bot/portfolio")).json()
+    for key in (
+        "positions", "allocations", "correlation", "correlation_gate",
+        "net_exposure", "contributions", "concentration_warnings", "caps", "method",
+    ):
+        assert key in body
+    assert body["method"] == "equal_risk"
+
+
 async def test_reload_plugins_endpoint(client) -> None:
     c, _ = client
     body = (await c.post("/api/strategies/reload-plugins")).json()

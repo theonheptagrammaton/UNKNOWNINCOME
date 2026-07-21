@@ -42,7 +42,12 @@ def _genome(name="AlwaysLong", exit_always=False) -> dict:
                 "long_exit": exit_rule, "short_entry": [], "short_exit": [],
             },
             "costs": {"funding_enabled": False},
-            "capital": {"initial_cash": 10_000, "size_pct": 1.0, "leverage": 1.0},
+            # Fixed 20% notional: deterministic and within the Phase-10 portfolio
+            # caps (net symbol ≤ 35%, gross ≤ 3x) so these plumbing tests exercise the
+            # engine, not the portfolio gate (which has its own tests).
+            "capital": {
+                "initial_cash": 10_000, "sizing": "fixed", "size_pct": 0.2, "leverage": 1.0,
+            },
         },
     }
 

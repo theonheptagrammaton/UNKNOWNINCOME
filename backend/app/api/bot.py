@@ -29,6 +29,7 @@ from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
 from app.models.system import AuditLog
 from app.models.trading import EquitySnapshot, Signal, Trade
+from app.portfolio.service import portfolio_snapshot
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -201,10 +202,24 @@ async def portfolio(session: AsyncSession = Depends(get_session)) -> dict:
         }
         for t in open_trades
     ]
+    # Portfolio layer (doc §24.6): allocation ring, correlation heatmap, net-exposure
+    # bars, contributions, plain-sentence concentration warnings.
+    try:
+        pf = await portfolio_snapshot(session, mode="paper")
+    except Exception:  # pragma: no cover - never let the panel 500 on a compute edge
+        pf = {}
     return {
         "positions": positions,
         "equity": last_eq.equity if last_eq else None,
         "exposure": last_eq.exposure if last_eq else 0.0,
+        "allocations": pf.get("allocations", []),
+        "correlation": pf.get("correlation", {"labels": [], "matrix": []}),
+        "correlation_gate": pf.get("correlation_gate", {"threshold": 0.70, "rows": []}),
+        "net_exposure": pf.get("net_exposure", []),
+        "contributions": pf.get("contributions", []),
+        "concentration_warnings": pf.get("concentration_warnings", []),
+        "caps": pf.get("caps", {}),
+        "method": pf.get("method", "equal_risk"),
     }
 
 

@@ -37,6 +37,14 @@ RISK_TYPES = (
     "liq_buffer",
     "insufficient_equity",
     "reconcile",  # live venue vs local state divergence (doc §9.2, Phase 7)
+    # Portfolio-level gate (doc §24.5, Phase 10) — evaluated before strategy limits.
+    "portfolio_drawdown",  # portfolio DD ≥ 12% → kill (stricter than strategy 15%)
+    "portfolio_daily_loss",  # portfolio daily loss ≥ 3% → halt new entries
+    "symbol_exposure",  # net symbol exposure > 35% of equity → reject
+    "gross_leverage",  # gross leverage > 3x → reject
+    "direction_concentration",  # one side > 60% → restrict same-side entry
+    "active_strategies",  # active-strategy band 3–8 breached → warn only
+    "correlation_gate",  # new strategy |ρ| > 0.70 vs pool → allocation cut/reject
 )
 
 
