@@ -12,6 +12,7 @@ from app.models.market import (
     Symbol,
     UniverseSnapshot,
 )
+from app.models.research import ExperimentTrial
 from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
 from app.models.system import AuditLog, Setting
@@ -24,6 +25,7 @@ __all__ = [
     "CandleSyncState",
     "DiscoveryScan",
     "EquitySnapshot",
+    "ExperimentTrial",
     "IndicatorDefinition",
     "Liquidation",
     "Order",

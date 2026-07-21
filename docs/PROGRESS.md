@@ -134,15 +134,15 @@ Kapsam ve kabul kriterleri: `docs/PROJE_DOKUMANI-v2.md` §22–§27. Sıra pazar
   - [x] `RAPOR-faz8-gerceklik.md` yazıldı: sentetik | gerçek yan yana.
 - **Durum:** `[~]` **Kod tamam, gerçek-veri sayıları operatörde** (2026-07-21). Kanıt: pytest **241/241** yeşil (+9 collector), ruff temiz. Kararlar: (1) collector Postgres tablo + worker startup + standalone giriş (kullanıcı onaylı); (2) Donchian `line_cross(close,dcu)` yapısal olarak tetiklenmez → Turtle-tarzı band_touch (yeni N-bar yüksek/düşük), lookahead-güvenli; (3) referans koşu fixed full-deployment boyutlama (B&H ile aynı zemin); (4) gerçek sayılar sahteleştirilmedi — ⏳ operatör runbook `RAPOR-faz8-gerceklik.md §6`. **Kalan:** backfill → reality_check → testnet_smoke → 72h soak → referans tablosu; sonuçlar RAPOR'a olduğu gibi yazılır, tag güncellenir.
 
-## Faz 9 — İstatistiksel Dürüstlük Katmanı `[ ]`
-- [ ] **Kapsam (§23):** v1.1 §6.5-5'in ertelediği çoklu-test borcu kapanır. Deney kütüğü (`research/registry.py`, append-only, tarama üstü, genome ailesi bazında `trials_total`), Deflated Sharpe Ratio (`research/deflation.py`, Bailey & López de Prado 2014), PBO/CSCV (`research/pbo.py`, S=16). Aşama 5.5 — Deflasyon kapısı (WFO'dan sonra, pazarlıksız): `DSR<0.95 → REDDET`, `PBO≥0.40 → REDDET`, `OOS işlem<30 → REDDET`, `OOS getiri≤B&H → REDDET`; config'ten gevşetilemez, yalnızca kod + `audit_log`.
+## Faz 9 — İstatistiksel Dürüstlük Katmanı `[x]`
+- [x] **Kapsam (§23):** v1.1 §6.5-5'in ertelediği çoklu-test borcu kapandı. Deney kütüğü (`research/registry.py` + `models/research.py` `experiment_trials`, append-only, tarama üstü, genome ailesi bazında `trials_total`), Deflated Sharpe Ratio + PBO/CSCV (`research/deflation.py`, Bailey & López de Prado 2014, S=16; SciPy'sız — `statistics.NormalDist`), sert kapı (`research/gate.py`). Aşama 5.5 — Deflasyon kapısı (`discovery/deflation_gate.py`, WFO'dan sonra, pazarlıksız): `DSR<0.95 → REDDET`, `PBO≥0.40 → REDDET`, `OOS işlem<30 → REDDET`, `OOS getiri≤B&H → REDDET`; eşikler **kod sabiti** (`deflation.py`), config'ten gevşetilemez; her tarama gate sabitlerini `audit_log`'a yazar.
 - **Kabul kriterleri (§23.6):**
-  - [ ] **Gürültü testi (en önemli kriter):** aynı volatilite/otokorelasyona sahip **rastgele yürüyüş** serisi üretilir; tam keşif hattı koşturulur; sonuç **sıfır aday**. Bir tane bile çıkarsa faz kapanmaz.
-  - [ ] Aynı stratejiyi 50 kez yeniden optimize etmek DSR'ını düşürür (deneme sayacı çalışıyor).
-  - [ ] Liderlik tablosunda her satır: ham Sharpe · DSR · PBO · trials_total · B&H farkı.
-  - [ ] Ham Sharpe'ı yüksek ama DSR'ı düşük bir stratejinin terfi ettirilemediği testle kanıtlı.
-  - [ ] Faz 8'in üç referans stratejisi bu kapıdan geçirilir; geçemezlerse **geçemedikleri yazılır**.
-- **Durum:** `[ ]` Başlamadı.
+  - [x] **Gürültü testi (en önemli kriter):** `scripts/noise_test.py` gerçek σ/otokorelasyonu eşleyen rastgele yürüyüş üretir, tam keşif hattını koşturur → **sıfır aday**. CI: `tests/test_noise_pipeline.py`. Broad koşu: 640 kombinasyon → 50 finalist → **0 aday**.
+  - [x] Aynı stratejiyi 50 kez yeniden optimize etmek DSR'ını düşürür (deneme sayacı çalışıyor) — `test_research_registry.py` (sayaç 50'ye çıkar) + `test_deflation_gate.py::test_reopt_lowers_dsr_and_flips_candidate`.
+  - [x] Liderlik tablosunda her satır: ham Sharpe (**"raw" rozeti**) · DSR · PBO · trials_total · B&H farkı; `DSR<0.95` satır soluk render (`LeaderboardTable.tsx`).
+  - [x] Ham Sharpe'ı yüksek ama DSR'ı düşük bir stratejinin terfi ettirilemediği testle kanıtlı — `test_deflation_gate.py::test_high_raw_sharpe_low_dsr_cannot_promote`.
+  - [x] Faz 8'in üç referans stratejisi kapıdan geçirilir (`scripts/reference_gate.py`) — gerçek veri **operatör adımı** (rule #13); veri yokken dürüst **SKIP**, beklenti §22.3: üçü de REDDET.
+- **Durum:** `[x]` Kod + testler tamam (`research/*`, `discovery/deflation_gate.py`, UI, iki script). **267 test geçiyor** (+26 yeni Faz-9), ruff temiz, frontend tsc temiz. Gerçek-veri referans-gate koşusu operatör adımı. Tag: `faz-9`. Rapor: `docs/RAPOR-faz9-deflasyon.md`.
 
 ## Faz 10 — Portföy Katmanı `[ ]`
 - [ ] **Kapsam (§24):** Yeni modül `backend/app/portfolio/` (`correlation.py`, `allocation.py`, `netting.py`, `limits.py`, `service.py`). Strateji getiri serileri arası kayan 90g Pearson korelasyonu + korelasyon kapısı (`|ρ|>0.70` → red veya orantılı kısıntı). Tahsis motoru: eşit risk (varsayılan) · ters volatilite · çeyrek Kelly (tavanlı, tam Kelly asla) · manuel kilit. Sembol bazında netleştirme (risk bir kez, PnL orantılı atıf). Portföy limitleri (günlük %3, toplam DD %12 → kill, net sembol %35, brüt kaldıraç 3x, tek-yön %60, aktif strateji 3–8). Yeni UI paneli: Portfolio.

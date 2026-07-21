@@ -288,13 +288,19 @@ export interface LeaderboardRow {
   oos_score: number | null;
   status: string;
   net_return: number | null;
-  sharpe: number | null;
+  sharpe: number | null; // raw (rule #14)
   max_drawdown: number | null;
   profit_factor: number | null;
   win_rate: number | null;
   num_trades: number | null;
   composite_score: number | null;
   alarms: number;
+  // Aşama 5.5 deflation gate (doc §23)
+  dsr: number | null;
+  pbo: number | null;
+  trials_total: number | null;
+  bh_excess: number | null;
+  gate_passed: boolean | null;
   scan_id?: string;
 }
 
@@ -343,6 +349,17 @@ export interface LeaderboardEntry {
   status: string;
   alarms: AlarmRow[];
   finalist?: { engine: string; net_return: number; num_trades: number; sharpe: number };
+  // Aşama 5.5 deflation gate (doc §23)
+  genome_hash: string | null;
+  trials_total: number | null;
+  dsr: number | null; // deflated Sharpe (probability) — promotion looks here, not raw
+  sr_star: number | null;
+  pbo: number | null;
+  bh_return: number | null;
+  bh_excess: number | null;
+  gate_passed: boolean | null;
+  gate_reasons: string[];
+  raw_sharpe: number | null;
 }
 
 export interface ScanDetailPayload {

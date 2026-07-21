@@ -6,21 +6,43 @@ import Link from "next/link";
 import { convertToStrategy, type LeaderboardEntry } from "@/lib/api";
 import { fmtDate, fmtNum, fmtPct } from "@/lib/format";
 
+// Deflation gate threshold (doc §23.5) — a code constant on the backend too. Rows
+// below it cannot be promoted and are rendered faded.
+const DSR_MIN = 0.95;
+
 type SortKey =
   | "rank"
   | "oos_score"
   | "net_return"
   | "sharpe"
+  | "dsr"
+  | "pbo"
+  | "trials_total"
+  | "bh_excess"
   | "max_drawdown"
   | "profit_factor"
   | "win_rate"
   | "num_trades";
 
-const COLUMNS: { key: SortKey; label: string; align: "left" | "right" }[] = [
+// Entry-level (non-metrics) numeric fields, incl. the Aşama 5.5 gate columns.
+const ENTRY_KEYS = new Set<SortKey>([
+  "rank",
+  "oos_score",
+  "dsr",
+  "pbo",
+  "trials_total",
+  "bh_excess",
+]);
+
+const COLUMNS: { key: SortKey; label: string; align: "left" | "right"; raw?: boolean }[] = [
   { key: "rank", label: "#", align: "left" },
   { key: "oos_score", label: "OOS", align: "right" },
   { key: "net_return", label: "Net", align: "right" },
-  { key: "sharpe", label: "Sharpe", align: "right" },
+  { key: "sharpe", label: "Sharpe", align: "right", raw: true },
+  { key: "dsr", label: "DSR", align: "right" },
+  { key: "pbo", label: "PBO", align: "right" },
+  { key: "trials_total", label: "Trials", align: "right" },
+  { key: "bh_excess", label: "vs B&H", align: "right" },
   { key: "max_drawdown", label: "MaxDD", align: "right" },
   { key: "profit_factor", label: "PF", align: "right" },
   { key: "win_rate", label: "Win", align: "right" },
@@ -28,8 +50,10 @@ const COLUMNS: { key: SortKey; label: string; align: "left" | "right" }[] = [
 ];
 
 function metricValue(e: LeaderboardEntry, key: SortKey): number {
-  if (key === "rank") return e.rank ?? 0;
-  if (key === "oos_score") return e.oos_score ?? -Infinity;
+  if (ENTRY_KEYS.has(key)) {
+    const v = e[key as keyof LeaderboardEntry];
+    return typeof v === "number" ? v : -Infinity;
+  }
   const m = e.metrics;
   if (!m) return -Infinity;
   const v = m[key as keyof typeof m];
@@ -76,6 +100,14 @@ export function LeaderboardTable({
                 } ${sortKey === c.key ? "text-fog" : ""}`}
               >
                 {c.label}
+                {c.raw ? (
+                  <span
+                    title="Raw Sharpe — not deflated. Promotion looks at DSR (rule #14)."
+                    className="ml-1 rounded bg-graphite px-1 py-0.5 text-[9px] font-normal uppercase tracking-wider text-fog-faint"
+                  >
+                    raw
+                  </span>
+                ) : null}
                 {sortKey === c.key ? (asc ? " ▲" : " ▼") : ""}
               </th>
             ))}
@@ -88,11 +120,15 @@ export function LeaderboardTable({
             const key = `${e.combo.trigger}+${e.combo.filter}+${e.combo.exit}@${e.symbol}:${e.tf}`;
             const isOpen = open === e.rank;
             const candidate = e.status === "candidate";
+            // DSR below the gate ⇒ cannot be promoted (doc §23.5) ⇒ render faded.
+            const belowGate = e.dsr != null && e.dsr < DSR_MIN;
             return (
               <Fragment key={key}>
                 <tr
                   onClick={() => setOpen(isOpen ? null : (e.rank ?? null))}
-                  className="cursor-pointer border-t border-line hover:bg-graphite"
+                  className={`cursor-pointer border-t border-line hover:bg-graphite ${
+                    belowGate ? "opacity-45" : ""
+                  }`}
                 >
                   <td className="py-2 pr-3">
                     <span className="font-mono text-xs text-fog">
@@ -111,6 +147,29 @@ export function LeaderboardTable({
                     {fmtPct(e.metrics?.net_return)}
                   </td>
                   <td className="py-2 pr-3 text-right">{fmtNum(e.metrics?.sharpe, 2)}</td>
+                  <td
+                    className={`py-2 pr-3 text-right ${
+                      e.dsr == null ? "" : belowGate ? "text-loss" : "text-profit"
+                    }`}
+                    title={e.dsr == null ? undefined : `DSR ${fmtNum(e.dsr, 3)} (gate ≥ ${DSR_MIN})`}
+                  >
+                    {fmtNum(e.dsr, 3)}
+                  </td>
+                  <td
+                    className={`py-2 pr-3 text-right ${
+                      e.pbo != null && e.pbo >= 0.4 ? "text-loss" : ""
+                    }`}
+                  >
+                    {e.pbo == null ? "—" : fmtNum(e.pbo, 2)}
+                  </td>
+                  <td className="py-2 pr-3 text-right">{e.trials_total ?? "—"}</td>
+                  <td
+                    className={`py-2 pr-3 text-right ${
+                      e.bh_excess == null ? "" : e.bh_excess > 0 ? "text-profit" : "text-loss"
+                    }`}
+                  >
+                    {fmtPct(e.bh_excess)}
+                  </td>
                   <td className="py-2 pr-3 text-right">{fmtPct(e.metrics?.max_drawdown)}</td>
                   <td className="py-2 pr-3 text-right">{fmtNum(e.metrics?.profit_factor, 2)}</td>
                   <td className="py-2 pr-3 text-right">{fmtPct(e.metrics?.win_rate)}</td>
@@ -262,6 +321,59 @@ function EntryDetail({ entry, scanId }: { entry: LeaderboardEntry; scanId?: stri
                 </div>
               ))
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* Deflation gate (§23.5) */}
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wider text-fog-faint">
+          Deflation gate (§23.5)
+        </span>
+        <div className="rounded border border-line bg-graphite p-3 text-xs text-fog-muted">
+          <div className="flex flex-wrap gap-x-6 gap-y-1">
+            <span>
+              DSR:{" "}
+              <span className={(entry.dsr ?? 0) >= DSR_MIN ? "text-profit" : "text-loss"}>
+                {fmtNum(entry.dsr, 3)}
+              </span>{" "}
+              <span className="text-fog-faint">(≥ {DSR_MIN})</span>
+            </span>
+            <span>
+              PBO:{" "}
+              <span className={(entry.pbo ?? 1) < 0.4 ? "text-profit" : "text-loss"}>
+                {entry.pbo == null ? "n/a" : fmtNum(entry.pbo, 3)}
+              </span>{" "}
+              <span className="text-fog-faint">(&lt; 0.40)</span>
+            </span>
+            <span>
+              SR*₀ (null max): <span className="text-fog">{fmtNum(entry.sr_star, 3)}</span>
+            </span>
+            <span>
+              trials (all-time): <span className="text-fog">{entry.trials_total ?? "—"}</span>
+            </span>
+            <span>
+              vs B&H:{" "}
+              <span className={(entry.bh_excess ?? 0) > 0 ? "text-profit" : "text-loss"}>
+                {fmtPct(entry.bh_excess)}
+              </span>
+            </span>
+          </div>
+          <div className="mt-2">
+            verdict:{" "}
+            {entry.gate_passed == null ? (
+              <span className="text-fog-faint">not gated</span>
+            ) : entry.gate_passed ? (
+              <span className="text-profit">passed — promotable</span>
+            ) : (
+              <span className="text-loss">
+                rejected — {entry.gate_reasons.join(" · ") || "failed gate"}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-[11px] text-fog-faint">
+            Raw Sharpe is {fmtNum(entry.raw_sharpe, 2)}; promotion looks at the deflated
+            value, corrected for {entry.trials_total ?? "—"} trials (rule #14).
           </div>
         </div>
       </div>

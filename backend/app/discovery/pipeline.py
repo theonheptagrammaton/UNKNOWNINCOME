@@ -22,9 +22,10 @@ from app.discovery.candidates import SingleScan, run_single_scan
 from app.discovery.combine import build_combos, combo_to_run_config
 from app.discovery.config import ScanConfig, apply_fast_mode
 from app.discovery.correlation import ClusterItem, eliminate_correlated
+from app.discovery.deflation_gate import apply_deflation_gate
 from app.discovery.finalist import compare, get_finalist_engine
 from app.discovery.optimize import optimize_combo
-from app.discovery.wfo import walk_forward
+from app.discovery.wfo import WFOReport, walk_forward
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,18 @@ def _aggregate_for_correlation(scans: list[SingleScan]) -> list[ClusterItem]:
 
 
 def run_scan(
-    config: ScanConfig, symbols: list[str], progress_cb: ProgressCb | None = None
+    config: ScanConfig,
+    symbols: list[str],
+    progress_cb: ProgressCb | None = None,
+    prior_trials: dict[str, int] | None = None,
 ) -> ScanResult:
-    """Run Aşama 1–6 over ``symbols``; returns the ranked leaderboard + alarms."""
+    """Run Aşama 1–6 (incl. the 5.5 deflation gate) over ``symbols``.
+
+    ``prior_trials`` maps each genome family hash to its all-time trial count from the
+    ledger (doc §23.2); the service loads it before the run and records this scan's
+    trials afterward. It defaults to empty so the pipeline stays database-free — the
+    gate then penalizes only this scan's own selection breadth.
+    """
     cb = progress_cb or _noop
     config = apply_fast_mode(config)
     if config.fast_mode:
@@ -103,13 +113,25 @@ def run_scan(
     # ── Stage 4 + 5 — Optuna then WFO, per combo ─────────────────────────────
     t0 = time.perf_counter()
     entries: list[dict] = []
+    wfos: list[WFOReport] = []
     total = max(1, len(combos))
     for i, combo in enumerate(combos):
         opt = optimize_combo(combo, config)
         wfo = walk_forward(combo, config, opt)
         entries.append(lb.build_entry(combo, config, opt, wfo))
-        cb("stage4_5_optimize_wfo", 0.5 + 0.45 * (i + 1) / total, combos_tried)
+        wfos.append(wfo)
+        cb("stage4_5_optimize_wfo", 0.48 + 0.42 * (i + 1) / total, combos_tried)
     timings["stage4_5_optimize_wfo"] = time.perf_counter() - t0
+
+    # ── Stage 5.5 — deflation gate (doc §23.5, non-negotiable) ───────────────
+    t0 = time.perf_counter()
+    cb("stage5_5_deflation", 0.9, combos_tried)
+    apply_deflation_gate(entries, wfos, config, combos_tried, prior_trials)
+    timings["stage5_5_deflation"] = time.perf_counter() - t0
+    logger.info(
+        "stage5.5 deflation: %d/%d entries pass the gate",
+        sum(1 for e in entries if e.get("gate_passed")), len(entries),
+    )
 
     # ── Stage 6 — leaderboard + finalist cross-validation ────────────────────
     t0 = time.perf_counter()

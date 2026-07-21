@@ -37,6 +37,19 @@ def build_entry(
         "survived": wfo.survived,
         "status": "candidate" if wfo.survived else "finalist",
         "alarms": [],  # filled by the finalist cross-check
+        # Aşama 5.5 deflation-gate fields (doc §23) — stamped by apply_deflation_gate.
+        # Defaults here keep every row's shape stable if the gate is skipped (empty scan).
+        "genome_hash": None,
+        "trials_total": None,
+        "dsr": None,  # deflated Sharpe (probability); promotion looks here, not raw
+        "sr_star": None,
+        "pbo": None,
+        "bh_return": None,
+        "bh_excess": None,
+        "gate_passed": None,
+        "gate_reasons": [],
+        # Rule #14: the raw Sharpe is labelled "raw" everywhere it surfaces.
+        "raw_sharpe": (wfo.full_metrics or {}).get("sharpe"),
     }
 
 

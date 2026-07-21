@@ -14,10 +14,13 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import write_audit
 from app.discovery.config import ScanConfig
 from app.discovery.pipeline import ScanResult, run_scan
 from app.discovery.store import write_leaderboard
 from app.models.discovery import DiscoveryScan
+from app.research import registry
+from app.research.gate import gate_constants
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,13 @@ async def execute_scan(session: AsyncSession, scan_id: str) -> None:
         if not symbols:
             raise ValueError("no symbols resolved for scan (empty universe)")
 
+        # Aşama 5.5 inputs from outside this scan: the ledger's all-time family trial
+        # counts (§23.2) and an audit row pinning the active gate constants — the only
+        # place a threshold change is recorded, since they are code constants (§23.5).
+        prior_trials = await registry.all_family_counts(session)
+        await write_audit(session, "system", "deflation_gate.thresholds", gate_constants())
+        await session.commit()
+
         holder = {"stage": "stage1_single_scan", "progress": 0.0, "combos": 0}
 
         def progress_cb(stage: str, fraction: float, combos_tried: int) -> None:
@@ -62,7 +72,9 @@ async def execute_scan(session: AsyncSession, scan_id: str) -> None:
             holder["progress"] = fraction
             holder["combos"] = combos_tried
 
-        task = asyncio.create_task(asyncio.to_thread(run_scan, config, symbols, progress_cb))
+        task = asyncio.create_task(
+            asyncio.to_thread(run_scan, config, symbols, progress_cb, prior_trials)
+        )
         while not task.done():
             await asyncio.sleep(_PROGRESS_INTERVAL_S)
             scan.stage = holder["stage"]
@@ -70,6 +82,12 @@ async def execute_scan(session: AsyncSession, scan_id: str) -> None:
             scan.combos_tried = int(holder["combos"])
             await session.commit()
         result: ScanResult = await task
+
+        # Append this scan's trials to the ledger so the next scan's DSR sees them
+        # (§23.2: re-optimizing the same family keeps raising N).
+        period = {"start_ts": config.start_ts, "end_ts": config.end_ts}
+        rows = registry.build_trial_rows(scan_id, result.leaderboard, period)
+        await registry.record_trials(session, rows)
 
         scan.leaderboard = _summary(result)
         scan.artifact_path = write_leaderboard(scan_id, _full_payload(result))
@@ -103,13 +121,19 @@ def _summary(result: ScanResult) -> dict:
             "oos_score": e.get("oos_score"),
             "status": e.get("status"),
             "net_return": m.get("net_return"),
-            "sharpe": m.get("sharpe"),
+            "sharpe": m.get("sharpe"),  # raw (rule #14) — UI labels it "raw"
             "max_drawdown": m.get("max_drawdown"),
             "profit_factor": m.get("profit_factor"),
             "win_rate": m.get("win_rate"),
             "num_trades": m.get("num_trades"),
             "composite_score": m.get("composite_score"),
             "alarms": len(e.get("alarms") or []),
+            # Aşama 5.5 deflation-gate columns (doc §23).
+            "dsr": e.get("dsr"),
+            "pbo": e.get("pbo"),
+            "trials_total": e.get("trials_total"),
+            "bh_excess": e.get("bh_excess"),
+            "gate_passed": e.get("gate_passed"),
         })
     return {
         "combos_tried": result.combos_tried,

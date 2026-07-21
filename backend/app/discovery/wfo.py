@@ -62,6 +62,11 @@ class WFOReport:
     survived: bool = False
     oos_mean_net_return: float = 0.0
     oos_trades: int = 0
+    # Aşama 5.5 inputs (doc §23): the realized OOS per-trade returns feed the Deflated
+    # Sharpe (skew/kurtosis/T); the full-period per-bar returns feed the PBO cohort
+    # matrix (all combos in a symbol × tf cell share the same bar axis).
+    oos_trade_returns: list[float] = field(default_factory=list)
+    full_bar_returns: list[float] = field(default_factory=list)
 
 
 def evaluate_survival(
@@ -169,6 +174,7 @@ def walk_forward(combo: Combo, config: ScanConfig, opt: OptimizeResult) -> WFORe
         windows = [Window(ts0, split, split, ts1)]
 
     layers: list[dict] = []
+    oos_trade_returns: list[float] = []
     for w in windows:
         trig, filt = opt.trigger_params, opt.filter_params
         if config.wfo.reoptimize:
@@ -177,7 +183,8 @@ def walk_forward(combo: Combo, config: ScanConfig, opt: OptimizeResult) -> WFORe
             train_cfg = config.model_copy(update={"start_ts": w.train_start, "end_ts": w.train_end})
             re = optimize_combo(combo, train_cfg)
             trig, filt = re.trigger_params, re.filter_params
-        score, metrics = _eval(combo, config, trig, filt, w.test_start, w.test_end)
+        score, metrics, layer_rets = _eval(combo, config, trig, filt, w.test_start, w.test_end)
+        oos_trade_returns.extend(layer_rets)
         layers.append({
             "train_start": w.train_start, "train_end": w.train_end,
             "test_start": w.test_start, "test_end": w.test_end,
@@ -192,8 +199,9 @@ def walk_forward(combo: Combo, config: ScanConfig, opt: OptimizeResult) -> WFORe
     oos_mean_net = float(np.mean(oos_nets)) if oos_nets else 0.0
     oos_trades = int(sum(x.get("num_trades", 0) for x in layers))
 
-    # Full-period eval: leaderboard metrics + the trade set for Monte-Carlo.
-    full_score, full_metrics, trade_rets = _eval_full(
+    # Full-period eval: leaderboard metrics + the trade set for Monte-Carlo + the
+    # per-bar returns for the Aşama 5.5 PBO cohort (§23.4).
+    full_score, full_metrics, trade_rets, bar_rets = _eval_full(
         combo, config, opt.trigger_params, opt.filter_params
     )
     plateau_ok, plateau_scores = parameter_plateau(combo, config, opt, full_score)
@@ -214,28 +222,41 @@ def walk_forward(combo: Combo, config: ScanConfig, opt: OptimizeResult) -> WFORe
         oos_score=oos_score, layers=layers, plateau_ok=plateau_ok,
         plateau_scores=plateau_scores, monte_carlo=mc, full_metrics=full_metrics,
         survived=survived, oos_mean_net_return=oos_mean_net, oos_trades=oos_trades,
+        oos_trade_returns=oos_trade_returns, full_bar_returns=[float(x) for x in bar_rets],
     )
 
 
-def _eval(combo, config, trig, filt, start, end) -> tuple[float, dict]:
+def _eval(combo, config, trig, filt, start, end) -> tuple[float, dict, list[float]]:
     cfg = config.model_copy(update={"start_ts": start, "end_ts": end})
     try:
         ev = run_eval(combo_to_run_config(combo, cfg, trig, filt))
     except Exception as exc:  # resilience per layer (incl. NoDataError)
         logger.debug("wfo layer eval failed %s: %s", combo.key, exc)
-        return 0.0, {}
-    return float(ev.metrics.get("composite_score") or 0.0), ev.metrics
+        return 0.0, {}, []
+    trade_rets = [float(t.return_pct) for t in ev.result.trades]
+    return float(ev.metrics.get("composite_score") or 0.0), ev.metrics, trade_rets
 
 
 def _eval_score(combo, config, trig, filt) -> float:
     return _eval_full(combo, config, trig, filt)[0]
 
 
-def _eval_full(combo, config, trig, filt) -> tuple[float, dict, np.ndarray]:
+def _bar_returns(equity: list[float]) -> np.ndarray:
+    """Per-bar returns from an equity curve (the PBO cohort series, §23.4)."""
+    eq = np.asarray(equity, dtype="float64")
+    if eq.size < 2:
+        return np.zeros(0)
+    prev = eq[:-1]
+    rets = np.where(prev != 0, eq[1:] / np.where(prev == 0, np.nan, prev) - 1.0, 0.0)
+    return np.nan_to_num(rets, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _eval_full(combo, config, trig, filt) -> tuple[float, dict, np.ndarray, np.ndarray]:
     try:
         ev = run_eval(combo_to_run_config(combo, config, trig, filt))
     except Exception as exc:  # resilience (incl. NoDataError)
         logger.debug("wfo full eval failed %s: %s", combo.key, exc)
-        return 0.0, {}, np.zeros(0)
+        return 0.0, {}, np.zeros(0), np.zeros(0)
     rets = np.array([t.return_pct for t in ev.result.trades], dtype="float64")
-    return float(ev.metrics.get("composite_score") or 0.0), ev.metrics, rets
+    bar_rets = _bar_returns(ev.result.equity)
+    return float(ev.metrics.get("composite_score") or 0.0), ev.metrics, rets, bar_rets
