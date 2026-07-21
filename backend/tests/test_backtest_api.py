@@ -95,6 +95,31 @@ async def test_run_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         await engine.dispose()
 
 
+async def test_preview_returns_report_with_indicators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /backtest/preview runs a genome synchronously and returns its chart data."""
+    monkeypatch.setattr(settings, "data_dir", str(tmp_path / "parquet"))
+    write_ohlcv(MARKET, SYMBOL, TF, ohlcv_rows_to_frame(make_wave_ohlcv(300, TF, seed=7)))
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/backtest/preview", json=_ema_config())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["config_hash"]
+        assert body["metrics"]["num_trades"] >= 1
+        report = body["report"]
+        assert len(report["candles"]) == 300
+        # Indicator overlays travel with the report for the on-demand chart.
+        keys = {ind["key"] for ind in report["indicators"]}
+        assert {"ema_fast", "ema_slow"} <= keys
+
+        # No data for an unseeded symbol ⇒ 422, not a 500.
+        missing = await client.post("/api/backtest/preview", json=_ema_config("NODATAUSDT"))
+        assert missing.status_code == 422
+
+
 async def test_failed_run_records_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

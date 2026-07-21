@@ -151,3 +151,36 @@ def test_report_shape(data_dir: Path) -> None:
 def test_no_data_raises(data_dir: Path) -> None:
     with pytest.raises(NoDataError):
         run_backtest(_ema_cross_config("long"))
+
+
+# ── Indicator series for the chart (overlay vs separate pane) ─────────────────
+def test_report_carries_indicator_series(data_dir: Path) -> None:
+    _seed(300)
+    out = run_backtest(_ema_cross_config("long"))
+    indicators = out["report"]["indicators"]
+    # Both configured EMAs come through, keyed and tagged as price-scale overlays.
+    keys = {ind["key"]: ind for ind in indicators}
+    assert {"ema_fast", "ema_slow"} <= set(keys)
+    for key in ("ema_fast", "ema_slow"):
+        ind = keys[key]
+        assert ind["pane"] == "price"  # a moving average overlays the candles
+        assert ind["lines"] and ind["lines"][0]["points"], "line must have samples"
+        # Warm-up NaNs are dropped, so the first sample lands after some bars.
+        assert len(ind["lines"][0]["points"]) < 300
+        for p in ind["lines"][0]["points"]:
+            assert p["value"] == p["value"]  # finite (no NaN leaked into JSON)
+
+
+def test_oscillator_goes_to_separate_pane(data_dir: Path) -> None:
+    """An RSI on a ~100-priced series must not be misread as a price overlay.
+
+    Magnitude alone is ambiguous here (RSI≈50 vs price≈100); category ("momentum")
+    is what puts it in its own sub-pane. Guards the low-priced-asset failure mode.
+    """
+    _seed(300)
+    config = _ema_cross_config("long")
+    # Add an unused RSI indicator (rules still reference the EMAs only).
+    config.indicators.append(IndicatorSpec(key="rsi", id="rsi", params={"timeperiod": 14}))
+    out = run_backtest(config)
+    rsi = next(i for i in out["report"]["indicators"] if i["key"] == "rsi")
+    assert rsi["pane"] == "separate"

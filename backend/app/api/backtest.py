@@ -5,11 +5,13 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backtest.config import RunConfig, config_hash
+from app.backtest.runner import NoDataError, run_backtest
 from app.backtest.store import read_report
 from app.core.db import get_session
 from app.core.queue import enqueue
@@ -22,6 +24,12 @@ class RunAccepted(BaseModel):
     run_id: str
     status: str
     config_hash: str
+
+
+class PreviewResult(BaseModel):
+    config_hash: str
+    metrics: dict | None
+    report: dict | None
 
 
 class RunDetail(BaseModel):
@@ -55,6 +63,27 @@ async def run_backtest_endpoint(
     await session.commit()
     await enqueue("run_backtest_job", run_id)
     return RunAccepted(run_id=run_id, status="queued", config_hash=chash)
+
+
+@router.post("/preview", response_model=PreviewResult)
+async def preview_backtest(config: RunConfig) -> PreviewResult:
+    """Run a genome synchronously and return its full report — no queue, no persist.
+
+    This is the on-demand chart path for Discovery and the Trade Deck: given a
+    strategy's genome (a ``RunConfig``) it reuses the exact same engine as a queued
+    run — same lookahead/cost model (rules #1, #2) — and hands back candles, markers
+    and indicator series so the caller can draw the identical chart. CPU-bound, so it
+    runs off the event loop.
+    """
+    try:
+        out = await run_in_threadpool(run_backtest, config)
+    except NoDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PreviewResult(
+        config_hash=config_hash(config),
+        metrics=out["metrics"],
+        report=out["report"],
+    )
 
 
 @router.get("/runs/{run_id}", response_model=RunDetail)

@@ -445,7 +445,7 @@ export function TradeDeck() {
 
       <ApprovalPanel onChange={refresh} />
 
-      <StrategyPanel strategies={strategies} onChange={refresh} />
+      <StrategyPanel strategies={strategies} signals={signals} onChange={refresh} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <PortfolioPanel portfolio={portfolio} />

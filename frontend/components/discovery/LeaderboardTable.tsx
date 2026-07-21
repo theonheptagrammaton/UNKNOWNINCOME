@@ -4,6 +4,7 @@ import { Fragment, useState } from "react";
 import Link from "next/link";
 
 import { convertToStrategy, type LeaderboardEntry } from "@/lib/api";
+import { GenomeChart } from "@/components/backtest/GenomeChart";
 import { fmtDate, fmtNum, fmtPct } from "@/lib/format";
 
 // Deflation gate threshold (doc §23.5) — a code constant on the backend too. Rows
@@ -257,6 +258,19 @@ function EntryDetail({ entry, scanId }: { entry: LeaderboardEntry; scanId?: stri
   const g = entry.genome;
   return (
     <div className="flex flex-col gap-4">
+      {/* Strategy chart — indicators + entry/exit points for this genome (doc §7). */}
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wider text-fog-faint">
+          Strategy chart · {entry.symbol} {entry.tf}
+        </span>
+        <div className="rounded border border-line bg-graphite p-3">
+          <GenomeChart
+            genome={g}
+            note="Preview backtest over the scan window — visual only; promotion uses the deflation gate below, not this single pass."
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-3">
         {/* Genome */}
         <div className="flex flex-col gap-1">

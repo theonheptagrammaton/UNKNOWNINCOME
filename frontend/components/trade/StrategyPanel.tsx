@@ -13,10 +13,13 @@ import {
   setStrategyMode,
   simulateDegrade,
   type BotMode,
+  type SignalRow,
   type StrategyOut,
   type StrategyVersion,
 } from "@/lib/api";
 import { fmtNum } from "@/lib/format";
+
+import { StrategyChart } from "./StrategyChart";
 
 const STATUS_TONE: Record<string, string> = {
   candidate: "border-line text-fog-muted",
@@ -215,8 +218,17 @@ function StrategyEditor({
   );
 }
 
-function StrategyCard({ strategy, onChange }: { strategy: StrategyOut; onChange: () => void }) {
+function StrategyCard({
+  strategy,
+  signals,
+  onChange,
+}: {
+  strategy: StrategyOut;
+  signals: SignalRow[];
+  onChange: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [chartOpen, setChartOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const h = strategy.health;
 
@@ -312,12 +324,25 @@ function StrategyCard({ strategy, onChange }: { strategy: StrategyOut; onChange:
         </button>
         <button
           type="button"
+          onClick={() => setChartOpen((o) => !o)}
+          className="rounded border border-paper/40 px-2.5 py-1 text-[11px] text-paper hover:bg-paper/10"
+        >
+          {chartOpen ? "Hide chart" : "Chart"}
+        </button>
+        <button
+          type="button"
           onClick={() => setOpen((o) => !o)}
           className="rounded border border-line px-2.5 py-1 text-[11px] text-fog-muted hover:text-fog"
         >
           {open ? "Close editor" : "Edit genome"}
         </button>
       </div>
+
+      {chartOpen && (
+        <div className="mt-3 border-t border-line pt-3">
+          <StrategyChart strategy={strategy} signals={signals} />
+        </div>
+      )}
 
       {open && <StrategyEditor strategy={strategy} onSaved={onChange} />}
     </div>
@@ -326,9 +351,11 @@ function StrategyCard({ strategy, onChange }: { strategy: StrategyOut; onChange:
 
 export function StrategyPanel({
   strategies,
+  signals,
   onChange,
 }: {
   strategies: StrategyOut[];
+  signals: SignalRow[];
   onChange: () => void;
 }) {
   return (
@@ -346,7 +373,12 @@ export function StrategyPanel({
       ) : (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
           {strategies.map((s) => (
-            <StrategyCard key={s.id} strategy={s} onChange={onChange} />
+            <StrategyCard
+              key={s.id}
+              strategy={s}
+              signals={signals}
+              onChange={onChange}
+            />
           ))}
         </div>
       )}

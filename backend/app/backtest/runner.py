@@ -55,8 +55,91 @@ def _sanitize(value: object) -> object:
     return value
 
 
-def build_report(config: RunConfig, ohlcv: pd.DataFrame, result: BacktestResult) -> dict:
-    """Assemble the UI payload: candles, equity, drawdown, markers, trades."""
+# Pane classification (UI overlay vs separate sub-pane). An indicator whose values
+# live on the price scale — a moving average, a Bollinger band, VWAP, SAR — is drawn
+# *on* the candle pane; an oscillator (RSI, MACD, Stochastic) or a volume/statistic
+# series is drawn in its own synced sub-pane below. Category decides it, because
+# category is what actually determines the scale: momentum/volume/cycle/statistic are
+# never price-scale, overlap/trend/price always are. Only genuinely ambiguous
+# categories (volatility — Bollinger overlays, ATR does not) fall back to a magnitude
+# test so the answer is right regardless of the asset's price level: the indicator's
+# median must sit within [0.25×, 4×] of the median close to count as price-scale.
+_PRICE_PANE_LO = 0.25
+_PRICE_PANE_HI = 4.0
+_PRICE_CATEGORIES = frozenset({"overlap", "trend", "price"})
+_SEPARATE_CATEGORIES = frozenset({"momentum", "volume", "cycle", "statistic", "pattern"})
+
+
+def _indicator_category(indicator_id: str) -> str:
+    """Registry category for ``indicator_id`` ("" if unknown, e.g. a custom plugin)."""
+    from app.indicators.registry import get_indicator
+
+    try:
+        return get_indicator(indicator_id).category
+    except Exception:  # noqa: BLE001 - unknown id ⇒ fall back to magnitude
+        return ""
+
+
+def _classify_pane(category: str, close_med: float, finite_cols: list[np.ndarray]) -> str:
+    """"price" (overlay) or "separate" (own sub-pane) for one indicator's lines."""
+    if category in _PRICE_CATEGORIES:
+        return "price"
+    if category in _SEPARATE_CATEGORIES:
+        return "separate"
+    if close_med > 0 and finite_cols:
+        med = float(np.median(np.concatenate(finite_cols)))
+        if med != 0 and _PRICE_PANE_LO <= abs(med) / close_med <= _PRICE_PANE_HI:
+            return "price"
+    return "separate"
+
+
+def _indicator_series(
+    config: RunConfig, frames: dict[str, pd.DataFrame], close: np.ndarray
+) -> list[dict]:
+    """Per-indicator line series for the chart, tagged ``price`` or ``separate``.
+
+    Each entry is ``{key, id, pane, lines:[{name, points:[{time, value}]}]}`` where
+    ``points`` are the finite samples of one output column (NaN warm-up dropped so
+    the line simply starts once the indicator is defined).
+    """
+    finite_close = close[np.isfinite(close)]
+    close_med = float(np.median(finite_close)) if finite_close.size else 0.0
+
+    series: list[dict] = []
+    for spec in config.indicators:
+        frame = frames.get(spec.key)
+        if frame is None:
+            continue
+        ts = frame["ts"].to_numpy(dtype="int64")
+        lines: list[dict] = []
+        finite_cols: list[np.ndarray] = []
+        for col in frame.columns:
+            if col == "ts":
+                continue
+            values = pd.to_numeric(frame[col], errors="coerce").to_numpy(dtype="float64")
+            mask = np.isfinite(values)
+            if not mask.any():
+                continue
+            points = [
+                {"time": int(t), "value": float(v)}
+                for t, v in zip(ts[mask], values[mask], strict=False)
+            ]
+            lines.append({"name": str(col), "points": points})
+            finite_cols.append(values[mask])
+        if not lines:
+            continue
+        pane = _classify_pane(_indicator_category(spec.id), close_med, finite_cols)
+        series.append({"key": spec.key, "id": spec.id, "pane": pane, "lines": lines})
+    return series
+
+
+def build_report(
+    config: RunConfig,
+    ohlcv: pd.DataFrame,
+    result: BacktestResult,
+    frames: dict[str, pd.DataFrame] | None = None,
+) -> dict:
+    """Assemble the UI payload: candles, equity, drawdown, markers, trades, indicators."""
     ts = ohlcv["ts"].to_numpy(dtype="int64")
     equity = np.asarray(result.equity, dtype="float64")
     peak = np.maximum.accumulate(equity) if len(equity) else equity
@@ -104,6 +187,12 @@ def build_report(config: RunConfig, ohlcv: pd.DataFrame, result: BacktestResult)
             }
         )
 
+    indicators = (
+        _indicator_series(config, frames, ohlcv["close"].to_numpy(dtype="float64"))
+        if frames
+        else []
+    )
+
     report = {
         "market": config.market,
         "symbol": config.symbol,
@@ -118,6 +207,7 @@ def build_report(config: RunConfig, ohlcv: pd.DataFrame, result: BacktestResult)
         "markers": markers,
         "trades": result.trades_as_dicts(),
         "cost_breakdown": result.cost_breakdown,
+        "indicators": indicators,
     }
     return _sanitize(report)  # type: ignore[return-value]
 
@@ -147,5 +237,5 @@ def run_backtest(config: RunConfig) -> dict:
         ohlcv, signals, config.costs, config.capital, funding, config.risk_exit
     )
     metrics = compute_metrics(result, config.tf)
-    report = build_report(config, ohlcv, result)
+    report = build_report(config, ohlcv, result, frames)
     return {"metrics": _sanitize(metrics), "report": report}

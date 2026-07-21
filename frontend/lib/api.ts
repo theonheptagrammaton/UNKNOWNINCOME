@@ -1,9 +1,12 @@
 // Backend API client + shared types (doc §12). Mirrors app/backtest/config.py
 // and the run report assembled by app/backtest/runner.py.
 
-// The API root is baked at build time (docker-compose sets NEXT_PUBLIC_API_URL);
-// REST routes live under /api.
-const API_ROOT = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Default to a *relative* root so browser calls hit the same origin that served
+// the page (works behind VSCode port-forward / tunnels / reverse proxies with a
+// single exposed port). next.config.ts rewrites /api/* to the backend, so no
+// CORS and no second public port are needed. Set NEXT_PUBLIC_API_URL only when
+// you deliberately want the browser to call the backend directly (absolute URL).
+const API_ROOT = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const API_BASE = `${API_ROOT}/api`;
 
 // ── Config (request) ─────────────────────────────────────────────────────────
@@ -117,6 +120,25 @@ export interface Marker {
   price: number;
   kind: string;
   forced?: boolean;
+  live?: boolean; // frontend-only: a live bot fill overlaid on a backtest preview
+}
+
+// One output column of an indicator as a time series (NaN warm-up already dropped
+// server-side, so the line starts once the indicator is defined).
+export interface IndicatorLine {
+  name: string;
+  points: Point[];
+}
+
+// A configured indicator's series, tagged with the pane it belongs in: "price"
+// overlays the candles (moving averages, bands, VWAP); "separate" gets its own
+// synced sub-pane below (oscillators like RSI/MACD/Stochastic). Classification is
+// by magnitude on the backend (runner.py), not category.
+export interface IndicatorSeries {
+  key: string;
+  id: string;
+  pane: "price" | "separate";
+  lines: IndicatorLine[];
 }
 
 export interface Trade {
@@ -163,6 +185,7 @@ export interface Report {
   markers: Marker[];
   trades: Trade[];
   cost_breakdown: CostBreakdown;
+  indicators: IndicatorSeries[];
 }
 
 export interface MonthlyReturn {
@@ -256,6 +279,28 @@ export async function fetchRun(
   return getJSON<RunDetail>(
     `/backtest/runs/${id}?include_report=${includeReport}`,
   );
+}
+
+// Synchronous single-genome run (doc §12) — the on-demand chart path for Discovery
+// and the Trade Deck. Returns the same report shape as a queued run: candles,
+// markers and indicator series ready to draw.
+export interface PreviewResult {
+  config_hash: string;
+  metrics: Metrics | null;
+  report: Report | null;
+}
+
+export async function previewRun(config: RunConfig): Promise<PreviewResult> {
+  const res = await fetch(`${API_BASE}/backtest/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`preview failed → ${res.status}: ${detail}`);
+  }
+  return res.json();
 }
 
 // ── Discovery (doc §7, §12) ──────────────────────────────────────────────────
