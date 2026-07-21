@@ -10,7 +10,11 @@ WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
+# Next resolves rewrite destinations at BUILD time, so the proxy target must be
+# present here (not just at runtime). Compose passes http://api:8000.
+ARG API_PROXY_TARGET=http://localhost:8000
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    API_PROXY_TARGET=$API_PROXY_TARGET
 RUN pnpm build
 
 FROM node:20-alpine AS runner
