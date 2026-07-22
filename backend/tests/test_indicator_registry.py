@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.indicators.registry import (
     CATEGORIES,
-    OHLCV_INPUTS,
+    VALID_INPUTS,
     get_indicator,
     get_registry,
     list_indicators,
@@ -26,7 +26,7 @@ def test_every_definition_is_well_formed() -> None:
         assert d.category in CATEGORIES
         assert d.source in ("talib", "pandas_ta", "custom")
         assert d.outputs, f"{d.id} has no outputs"
-        assert d.inputs and set(d.inputs) <= set(OHLCV_INPUTS)
+        assert d.inputs and set(d.inputs) <= set(VALID_INPUTS)
         assert d.signal_templates, f"{d.id} has no signal templates"
         for name, spec in d.params.items():
             assert spec.default is not None, f"{d.id}.{name} missing default"

@@ -20,6 +20,21 @@ logger = logging.getLogger(__name__)
 # Canonical OHLCV inputs, in file/column order.
 OHLCV_INPUTS = ("open", "high", "low", "close", "volume")
 
+# Faz 11 §25 alpha-surface inputs beyond OHLCV: the free taker-flow kline columns
+# plus the open-interest / funding / liquidation streams the new primitives consume.
+# They are valid indicator inputs but are not part of the base OHLCV frame.
+ALPHA_INPUTS = (
+    "taker_buy_base_volume",
+    "number_of_trades",
+    "open_interest",
+    "funding_rate",
+    "liq_buy_notional",
+    "liq_sell_notional",
+)
+
+# Every input an indicator may legitimately declare.
+VALID_INPUTS = OHLCV_INPUTS + ALPHA_INPUTS
+
 # doc §5.2 categories (+ "overlap" kept distinct so moving averages read cleanly).
 CATEGORIES = (
     "trend",

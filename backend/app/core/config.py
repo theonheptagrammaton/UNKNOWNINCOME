@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     liquidation_batch_rows: int = 500  # flush after this many buffered events
     liquidation_batch_seconds: float = 5.0  # …or this many seconds, whichever first
 
+    # ─── Open-interest collector (Faz 11, §25.3) ──────────────────────────
+    # Polls current OI every `open_interest_poll_seconds` on a 5-min grid. Like
+    # liquidations, OI history is not backfillable past ~30 days, so collect forward.
+    open_interest_collector_enabled: bool = False
+    open_interest_poll_seconds: float = 300.0  # 5-minute REST poll
+
     # ─── Live execution (Phase 7, doc §9.2–9.5) ───────────────────────────
     # The whole live-order path is closed by default. Even with this on, an
     # effective-Live strategy only reaches the exchange once the promotion gate

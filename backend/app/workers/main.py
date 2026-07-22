@@ -11,6 +11,7 @@ Run with: ``arq app.workers.main.WorkerSettings``
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import Any
@@ -47,6 +48,9 @@ async def startup(ctx: dict[str, Any]) -> None:
 
     if settings.liquidation_collector_enabled:
         await _start_liquidation_collector(ctx)
+
+    if settings.open_interest_collector_enabled:
+        await _start_oi_collector(ctx)
 
 
 async def _enqueue_reopt(strategy_id: str) -> None:
@@ -113,16 +117,76 @@ async def _start_liquidation_collector(ctx: dict[str, Any]) -> None:
     logger.info("liquidation collector started")
 
 
+async def _start_oi_collector(ctx: dict[str, Any]) -> None:
+    """Launch the 5-minute open-interest poll as a supervised background task (§25.3).
+
+    Like liquidations, OI cannot be backfilled far, so we start polling the moment the
+    worker comes up. Polls the latest universe; a failing symbol is skipped, not fatal.
+    """
+    import asyncio
+
+    from app.core.db import SessionLocal
+    from app.data.adapters.binance_usdm import BinanceUsdmAdapter
+    from app.data.collectors.open_interest import run_oi_collector
+    from app.data.sync import resolve_market_infos
+    from app.data.universe import latest_universe_symbols
+
+    stop = ctx.setdefault("collector_stop", {"v": False})
+    adapter = BinanceUsdmAdapter()
+    ctx["oi_adapter"] = adapter
+    try:
+        async with SessionLocal() as session:
+            names = await latest_universe_symbols(session, adapter.market)
+        infos = await resolve_market_infos(adapter, names)
+        pairs = [(i.ccxt_symbol, i.symbol) for i in infos]
+    except Exception as exc:  # pragma: no cover - startup resilience
+        logger.warning("OI collector universe resolve skipped: %s", exc)
+        pairs = []
+
+    ctx["oi_task"] = asyncio.create_task(
+        run_oi_collector(adapter.fetch_open_interest, pairs, stop=lambda: stop["v"])
+    )
+    logger.info("open-interest collector started (%d symbols)", len(pairs))
+
+
+async def aggregate_liquidations_job(ctx: dict[str, Any]) -> None:
+    """Cron: fold recently collected liquidation events into per-bar Parquet (§25.3).
+
+    Recomputes the last few hours of minute-buckets each run (dedup makes it
+    idempotent) so ``liq_cascade`` reads them through DuckDB on the sync compute path.
+    """
+    if not settings.liquidation_collector_enabled:
+        return
+    import time as _time
+
+    from app.core.db import SessionLocal
+    from app.data.alpha import aggregate_liquidations
+    from app.data.universe import latest_universe_symbols
+
+    since_ms = int(_time.time() * 1000) - 6 * 3_600_000  # last 6h, fully recomputed
+    try:
+        async with SessionLocal() as session:
+            symbols = await latest_universe_symbols(session, settings.market)
+            for symbol in symbols:
+                await aggregate_liquidations(session, settings.market, symbol, since_ms)
+    except Exception as exc:  # pragma: no cover - cron resilience
+        logger.warning("aggregate_liquidations_job failed: %s", exc)
+
+
 async def shutdown(ctx: dict[str, Any]) -> None:
-    """Signal the bot loop + collector to stop and cancel their background tasks."""
+    """Signal the bot loop + collectors to stop and cancel their background tasks."""
     for flag in ("bot_stop", "collector_stop"):
         stop = ctx.get(flag)
         if stop is not None:
             stop["v"] = True
-    for key in ("bot_task", "telegram_task", "liquidation_task"):
+    for key in ("bot_task", "telegram_task", "liquidation_task", "oi_task"):
         task = ctx.get(key)
         if task is not None:
             task.cancel()
+    adapter = ctx.get("oi_adapter")
+    if adapter is not None:
+        with contextlib.suppress(Exception):
+            await adapter.close()
 
 
 async def sync_data_job(
@@ -269,6 +333,8 @@ class WorkerSettings:
     cron_jobs = [
         cron(heartbeat, second={0, 15, 30, 45}, run_at_startup=True),
         cron(incremental_sync, minute=set(range(0, 60, 5))),
+        # Fold collected liquidation events into per-bar Parquet for `liq_cascade` (§25.3).
+        cron(aggregate_liquidations_job, minute=set(range(0, 60, 5))),
         cron(refresh_universe, weekday="mon", hour=0, minute=5),
         # Weekly WFO re-optimization (doc §8.3 v1). Sunday 03:00 UTC, off-peak.
         cron(scheduled_reopt, weekday="sun", hour=3, minute=0),

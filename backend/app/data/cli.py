@@ -80,7 +80,13 @@ async def _devseed(symbols: list[str], tf: str, bars: int, seed: int) -> None:
     import numpy as np
     import pandas as pd
 
-    from app.data.parquet_store import ohlcv_rows_to_frame, write_funding, write_ohlcv
+    from app.data.parquet_store import (
+        OPEN_INTEREST_COLUMNS,
+        ohlcv_rows_to_frame,
+        write_funding,
+        write_ohlcv,
+        write_open_interest,
+    )
     from app.data.timeframes import FUNDING_INTERVAL_MS, tf_to_ms
     from app.models.market import CandleSyncState
 
@@ -98,14 +104,26 @@ async def _devseed(symbols: list[str], tf: str, bars: int, seed: int) -> None:
             close = 100.0 + drift + cycle
             close = np.abs(close) + 10.0
             rows: list[list[float]] = []
+            oi_rows: list[list[float]] = []
+            oi_level = 1_000_000.0
             for i in range(bars):
                 c = float(close[i])
                 o = c + float(rng.standard_normal()) * 0.3
                 h = max(o, c) + abs(float(rng.standard_normal())) * 0.5
                 low = min(o, c) - abs(float(rng.standard_normal())) * 0.5
                 v = float(rng.random()) * 1000 + 100
-                rows.append([start + i * step, o, h, low, c, v])
+                # Faz 11 §25.2: taker flow columns (aggressive-buy share + trade count).
+                taker_buy = v * float(rng.uniform(0.35, 0.65))
+                num_trades = float(rng.integers(20, 600))
+                rows.append([start + i * step, o, h, low, c, v, taker_buy, num_trades])
+                # Synthetic open interest so oi_divergence has data locally (SYNTHETIC).
+                oi_level = max(1.0, oi_level + float(rng.standard_normal()) * 5_000)
+                oi_rows.append([start + i * step, oi_level, oi_level * c])
             n = write_ohlcv(settings.market, symbol, tf, ohlcv_rows_to_frame(rows))
+            write_open_interest(
+                settings.market, symbol,
+                pd.DataFrame(oi_rows, columns=OPEN_INTEREST_COLUMNS),
+            )
 
             f_rows: list[dict] = []
             f = ((start // FUNDING_INTERVAL_MS) + 1) * FUNDING_INTERVAL_MS

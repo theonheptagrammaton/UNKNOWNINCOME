@@ -154,14 +154,15 @@ Kapsam ve kabul kriterleri: `docs/PROJE_DOKUMANI-v2.md` §22–§27. Sıra pazar
   - [x] Brüt kaldıraç 3x'i aşacak emir reddedilir + `risk_events` — `test_portfolio_gate_integration.py::test_gross_leverage_over_3x_rejected_and_emits_event` (borsaya emir gitmez, `gross_leverage` olayı).
 - **Durum:** `[x]` Kod + testler tamam (`portfolio/*`, RiskLayer/motor entegrasyonu, UI). **303 test geçiyor** (+33 yeni Faz-10), ruff temiz, frontend tsc temiz. Yapısal tavanlar (%25/%35/3x) kod sabiti; iki yeni ayar §28.2 sözlüğüne, yeni `risk_events` tipleri §28.3'e eklendi (kural 19). Gerçek çok-stratejili canlı havuz sayıları operatör adımı. Tag: `faz-10`. Rapor: `docs/RAPOR-faz10-portfoy.md`.
 
-## Faz 11 — Alfa Yüzeyini Genişletme `[ ]`
-- [ ] **Kapsam (§25):** Alfa yüzeyi OHLCV dışına açılır. Bedava taker akışı: `taker_buy_base_volume` + `number_of_trades` Parquet'e yazılır (`flow_imbalance`, `avg_trade_size`). Yeni kaynaklar: açık pozisyon (OI, 5 dk REST), funding vade yapısı (değişim + uçlar), likidasyon akışı (WS `!forceOrder@arr` — **geriye dönük toplanamaz, Faz 8'de başlat**). Dört yeni sinyal primitifi: `flow_imbalance`, `oi_divergence`, `funding_extreme`, `liq_cascade` — registry'ye normal indikatör gibi girer, Faz 9 kapısına normal gibi takılır.
+## Faz 11 — Alfa Yüzeyini Genişletme `[x]`
+- [x] **Kapsam (§25):** Alfa yüzeyi OHLCV dışına açıldı. Bedava taker akışı: `taker_buy_base_volume` + `number_of_trades` **opsiyonel** Parquet kolonları (`parquet_store`, `duckdb_query.query_ohlcv(include_extended)`, adapter ham `fapiPublicGetKlines`); eski dosyalar geriye dönük NaN. Yeni kaynaklar: açık pozisyon (`data/collectors/open_interest.py`, 5 dk REST poll, OHLCV gap disiplini), funding **değişimi + kendi tarihsel yüzdeliği** (`funding_extreme` native seride expanding percentile), likidasyon akışı Faz 8'den korundu + `data/alpha.py` ile sorgulanabilir/aggregate. Dört primitif `indicators/custom/` (`flow_imbalance`, `oi_divergence`, `funding_extreme`, `liq_cascade`) — registry'ye normal indikatör gibi girer (kategori→rol), genel `slope` yolundan geçer, **özel eşik yok**, Faz 9 kapısına normal gibi takılır. Bağlam `ohlcv.attrs` + `custom/_alpha.py` köprüsü.
 - **Kabul kriterleri (§25.5):**
-  - [ ] `taker_buy_base_volume` ve `number_of_trades` Parquet şemasında; 24 aylık geçmiş için yeniden indirildi.
-  - [ ] OI toplayıcısı 5 dakikada bir yazıyor; gap taraması OHLCV'yle aynı disiplinde.
-  - [ ] Likidasyon WS toplayıcısı systemd altında; kopma sonrası otomatik yeniden bağlanma; `dedup_key UNIQUE` çift kayıt engelliyor.
-  - [ ] Dört yeni primitif birim testli ve **lookahead-güvenli** (Faz 2 property test deseni).
-  - [ ] Yeni primitiflerle koşulan tarama gürültü testinden geçiyor (kural 15).
+  - [x] `taker_buy_base_volume` ve `number_of_trades` Parquet şemasında (opsiyonel kolon; legacy NaN) — `test_kline_taker_columns.py` (6 test). **24 aylık yeniden-indirme operatör adımı** (kural 13): şema + indirici hazır.
+  - [x] OI toplayıcısı 5 dk yazıyor; gap taraması OHLCV disiplininde — `test_open_interest_collector.py` (4 test: 5 dk ızgara, atlanan poll→gap, hatalı sembol atlanır).
+  - [x] Likidasyon toplayıcısı systemd/reconnect/`dedup_key UNIQUE` (Faz 8, korundu) + artık sorgulanabilir — `test_liquidation_collector.py` + `test_alpha_query.py` (6 test).
+  - [x] Dört primitif birim testli ve **lookahead-güvenli** (Faz 2 property test deseni) — `test_alpha_primitives.py` (17 test; "geleceği değiştir, geçmiş sabit" × 4).
+  - [x] Yeni primitiflerle koşulan tarama gürültü testinden geçiyor (kural 15) — `test_noise_pipeline.py::test_alpha_primitives_over_noise_yield_zero_candidates` (0 aday; gate primitif-kombinlerini aktif reddetti). `scripts/noise_test.py --alpha`.
+- **Durum:** `[x]` Kod + testler tamam. **336 test geçiyor** (+33 yeni Faz-11), ruff temiz. İki yeni ayar §28.2 Kuşak 6 sözlüğüne + `.env.example`'a eklendi (kural 19). Gerçek taker yeniden-indirme / canlı OI·funding·likidasyon sayıları operatör adımı (kural 13). Tag: `faz-11`. Rapor: `docs/RAPOR-faz11-alfa.md`.
 - **Durum:** `[ ]` Başlamadı.
 
 ## Faz 12 — Yürütme Kalitesi ve Kapasite `[ ]`

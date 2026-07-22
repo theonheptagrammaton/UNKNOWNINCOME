@@ -568,6 +568,13 @@ Dört kuşağa ayrılmıştır. **Birinci kuşağa dokunmak için sebep gerekir.
 | `liquidation_batch_rows` (500) | Kaç olay biriktikten sonra toplu yazılır | Daha büyük parti, daha az DB yazımı, kopmada daha çok risk | Daha sık yazım, daha az bellek, daha çok DB trafiği |
 | `liquidation_batch_seconds` (5) | En geç kaç saniyede bir toplu yazılır | Yazımlar seyrekleşir; düşük hacimde tampon uzun bekler | Daha taze veri, daha sık küçük yazım |
 
+#### Kuşak 6 — Alfa yüzeyi verisi (Faz 11)
+
+| Ayar | Ne yapar | Yükseltirsen | Düşürürsen |
+|---|---|---|---|
+| `open_interest_collector_enabled` (kapalı) | Açık pozisyon (OI) 5 dk REST toplayıcısını worker'da başlatır | Açarsan bugünden OI birikir (**~30 günden eski geriye indirilemez**, erken aç); `oi_divergence` beslenir | Kapalıysa OI toplanmaz; o boşluk sonradan doldurulamaz |
+| `open_interest_poll_seconds` (300) | OI ne sıklıkta çekilir (5 dk ızgara) | Daha seyrek çekim, daha az istek, daha kaba OI izi | Daha sık çekim, daha çok REST trafiği, ızgaradan sapma riski |
+
 ### 28.3 Karar anlatıcısı
 
 `reason` alanı bugün JSON. UI ve Telegram için düz cümleye çevrilir:

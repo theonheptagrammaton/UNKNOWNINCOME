@@ -103,7 +103,11 @@ def compute_indicator(
     if def_ is None:
         raise KeyError(f"unknown indicator: {indicator_id!r}")
 
-    ohlcv = query_ohlcv(market, symbol, tf)
+    # Extended read carries the taker-flow columns (§25.2); ``attrs`` hands the alpha
+    # primitives their (market, symbol, tf) so they can reach OI / funding / liquidation
+    # stores without widening the plugin ``compute(df, **params)`` contract.
+    ohlcv = query_ohlcv(market, symbol, tf, include_extended=True)
+    ohlcv.attrs.update({"market": market, "symbol": symbol, "tf": tf})
     phash = params_hash(def_, params)
     path = cache_path(market, symbol, tf, indicator_id, phash)
     merged = effective_params(def_, params)

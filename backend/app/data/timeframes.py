@@ -18,11 +18,18 @@ TF_MS: dict[str, int] = {
 FUNDING_TF = "funding"
 FUNDING_INTERVAL_MS = 28_800_000
 
+# Open-interest is polled every 5 min and stored on a 5-min grid (Faz 11 §25.3),
+# so gap scanning reuses the same discipline as OHLCV.
+OI_TF = "oi_5m"
+OI_INTERVAL_MS = 300_000
+
 
 def tf_to_ms(tf: str) -> int:
-    """Milliseconds per bar for a timeframe (or the funding interval)."""
+    """Milliseconds per bar for a timeframe (or the funding / OI poll interval)."""
     if tf == FUNDING_TF:
         return FUNDING_INTERVAL_MS
+    if tf == OI_TF:
+        return OI_INTERVAL_MS
     try:
         return TF_MS[tf]
     except KeyError as exc:

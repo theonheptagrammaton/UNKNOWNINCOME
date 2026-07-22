@@ -11,7 +11,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.noise_test import SeriesStats, generate_random_walk
+from scripts.noise_test import (
+    SeriesStats,
+    _alpha_scan_config,
+    generate_random_walk,
+    write_alpha_inputs,
+)
 
 from app.data.parquet_store import ohlcv_rows_to_frame, write_ohlcv
 from app.discovery.config import ScanConfig
@@ -50,6 +55,45 @@ def test_noise_yields_zero_candidates(data_dir: Path) -> None:
     # evidence the gate ran rather than the pipeline simply finding nothing.
     assert result.leaderboard, "expected finalists to exist (and be rejected)"
     assert all("gate_passed" in e for e in result.leaderboard)
+    assert any(e.get("gate_reasons") for e in result.leaderboard)
+
+
+def test_alpha_primitives_over_noise_yield_zero_candidates(data_dir: Path) -> None:
+    """KABUL (§25.5, rule #15): the four Faz 11 primitives find no edge in noise.
+
+    New data is **not** gate-exempt. We seed the random walk *plus* pure-noise taker
+    flow, open interest, funding and liquidations, then run a scan whose candidate set
+    is the four alpha primitives (+ volatility exits). A correct pipeline returns zero
+    candidates and the gate must have actively rejected the primitive-built combos.
+    """
+    symbols = SYMBOLS[:2]
+    for i, symbol in enumerate(symbols):
+        frame = generate_random_walk(
+            SeriesStats(sigma=0.012, phi=0.02, base_price=100.0, source="default"),
+            1500, TF, 42 + i,
+        )
+        write_ohlcv(MARKET, symbol, TF, frame)
+        write_alpha_inputs(MARKET, symbol, TF, 1500, 42 + i)
+
+    config = _alpha_scan_config(symbols, TF, seed=42)
+    result = run_scan(config, symbols)
+
+    survivors = [e for e in result.leaderboard if e.get("survived")]
+    assert survivors == [], (
+        "alpha primitives produced candidates from noise — fix the PIPELINE, not the "
+        "gate (§25.5): "
+        + ", ".join(
+            f"{e['combo']['trigger']}+{e['combo']['filter']}+{e['combo']['exit']}"
+            for e in survivors
+        )
+    )
+    # The primitives really were combined and gated (not silently absent).
+    combo_ids = {
+        role_id
+        for e in result.leaderboard
+        for role_id in (e["combo"]["trigger"], e["combo"]["filter"], e["combo"]["exit"])
+    }
+    assert combo_ids & {"flow_imbalance", "liq_cascade", "oi_divergence", "funding_extreme"}
     assert any(e.get("gate_reasons") for e in result.leaderboard)
 
 

@@ -68,7 +68,12 @@ def measure_stats(market: str, symbol: str, tf: str) -> SeriesStats:
 def generate_random_walk(
     stats: SeriesStats, n_bars: int, tf: str, seed: int
 ) -> pd.DataFrame:
-    """AR(1) random walk with the measured σ and φ — OHLCV rows (doc §23.6, rule #15)."""
+    """AR(1) random walk with the measured σ and φ — extended OHLCV (doc §23.6, rule #15).
+
+    Also emits the Faz 11 taker-flow columns as **pure noise** (random aggressive-buy
+    share and trade count) so ``flow_imbalance`` is genuinely exercised on the random
+    walk — a correct pipeline must still find no edge in them (rule #15).
+    """
     rng = np.random.default_rng(seed)
     # Stationary AR(1): var(r) = σ²  ⇒  innovation std = σ·√(1−φ²).
     innov_std = stats.sigma * np.sqrt(max(1e-9, 1.0 - stats.phi**2))
@@ -88,12 +93,106 @@ def generate_random_walk(
         h = max(o, c) + span
         low = max(1e-9, min(o, c) - span)
         v = float(rng.random()) * 1000 + 100
-        rows.append([start + i * step, o, h, low, c, v])
-    return pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
+        taker_buy = v * float(rng.uniform(0.3, 0.7))  # noise aggressive-buy share
+        num_trades = float(rng.integers(20, 600))
+        rows.append([start + i * step, o, h, low, c, v, taker_buy, num_trades])
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "ts", "open", "high", "low", "close", "volume",
+            "taker_buy_base_volume", "number_of_trades",
+        ],
+    )
+
+
+# The four Faz 11 primitives plus the volatility exits a valid combo needs — the
+# candidate set for the alpha noise run (§25.5: new data is not gate-exempt).
+ALPHA_SCAN_IDS = (
+    "flow_imbalance", "liq_cascade",       # momentum → trigger
+    "oi_divergence", "funding_extreme",    # volume / statistic → filter
+    "atr", "natr", "bbands",               # volatility → exit
+)
+
+
+def write_alpha_inputs(
+    market: str, symbol: str, tf: str, n_bars: int, seed: int
+) -> None:
+    """Write pure-noise OI, funding and liquidation streams for a symbol (§25.5).
+
+    So ``oi_divergence``, ``funding_extreme`` and ``liq_cascade`` are exercised on the
+    random walk too. Everything is noise by construction — a correct pipeline returns
+    zero candidates regardless.
+    """
+    from app.data.parquet_store import (
+        LIQUIDATION_COLUMNS,
+        OPEN_INTEREST_COLUMNS,
+        write_funding,
+        write_liquidation_bars,
+        write_open_interest,
+    )
+    from app.data.timeframes import FUNDING_INTERVAL_MS
+
+    rng = np.random.default_rng(seed)
+    step = tf_to_ms(tf)
+    start = 1_600_000_000_000
+    ts = np.array([start + i * step for i in range(n_bars)], dtype="int64")
+
+    oi = 1_000_000.0 + np.cumsum(rng.standard_normal(n_bars)) * 5_000.0
+    write_open_interest(
+        market, symbol,
+        pd.DataFrame(
+            {"ts": ts, "open_interest": np.abs(oi) + 1.0, "open_interest_value": np.nan},
+            columns=OPEN_INTEREST_COLUMNS,
+        ),
+    )
+
+    f_ts = np.arange(ts[0], ts[-1] + 1, FUNDING_INTERVAL_MS, dtype="int64")
+    write_funding(
+        market, symbol,
+        pd.DataFrame({"ts": f_ts, "funding_rate": rng.normal(0.0, 3e-4, len(f_ts))}),
+    )
+
+    # Liquidation bursts scattered as noise on ~10% of bars.
+    hit = rng.random(n_bars) < 0.1
+    write_liquidation_bars(
+        market, symbol,
+        pd.DataFrame(
+            {
+                "ts": ts,
+                "liq_buy_notional": np.where(hit, rng.uniform(0, 5e5, n_bars), 0.0),
+                "liq_sell_notional": np.where(hit, rng.uniform(0, 5e5, n_bars), 0.0),
+            },
+            columns=LIQUIDATION_COLUMNS,
+        ),
+    )
+
+
+def _alpha_scan_config(symbols: list[str], tf: str, seed: int):
+    """A small-budget scan whose candidates are the four Faz 11 primitives (§25.5)."""
+    from app.discovery.config import (
+        CandidateSelection,
+        FinalistConfig,
+        ScanConfig,
+        WFOConfig,
+    )
+
+    return ScanConfig(
+        symbols=symbols,
+        timeframes=[tf],
+        seed=seed,
+        fast_mode=False,  # keep our explicit candidate ids (fast_mode overrides them)
+        candidate=CandidateSelection(mode="ids", ids=list(ALPHA_SCAN_IDS)),
+        combo_pool_per_role=3,
+        top_n_combos=6,
+        optuna_trials=8,
+        monte_carlo_runs=100,
+        wfo=WFOConfig(train_days=20, test_days=10, step_days=10),
+        finalist=FinalistConfig(enabled=True, top_k=3),
+    )
 
 
 def run_noise_scan(
-    symbols: list[str], tf: str, bars: int, seed: int, broad: bool
+    symbols: list[str], tf: str, bars: int, seed: int, broad: bool, alpha: bool = False
 ) -> int:
     """Write random-walk parquet to an isolated store, run the full pipeline, count candidates."""
     from app.data.parquet_store import write_ohlcv
@@ -101,7 +200,8 @@ def run_noise_scan(
     from app.discovery.pipeline import run_scan
 
     market = settings.market
-    print(f"Faz 9 — noise test · {len(symbols)} symbol(s) × {tf} · {bars} bars · seed {seed}")
+    label = "Faz 11 alpha primitives" if alpha else "Faz 9"
+    print(f"{label} — noise test · {len(symbols)} symbol(s) × {tf} · {bars} bars · seed {seed}")
     stats = measure_stats(market, symbols[0], tf)
     print(
         f"  matched stats [{stats.source}]: σ={stats.sigma:.5f}  φ={stats.phi:+.3f}  "
@@ -115,13 +215,18 @@ def run_noise_scan(
             for si, symbol in enumerate(symbols):
                 frame = generate_random_walk(stats, bars, tf, seed + si)
                 write_ohlcv(market, symbol, tf, frame)
+                if alpha:
+                    write_alpha_inputs(market, symbol, tf, bars, seed + si)
 
-            config = ScanConfig(
-                symbols=symbols,
-                timeframes=[tf],
-                fast_mode=not broad,  # broad = wider candidate set, slower, more honest
-                seed=seed,
-            )
+            if alpha:
+                config = _alpha_scan_config(symbols, tf, seed)
+            else:
+                config = ScanConfig(
+                    symbols=symbols,
+                    timeframes=[tf],
+                    fast_mode=not broad,  # broad = wider candidate set, slower, more honest
+                    seed=seed,
+                )
             result = run_scan(config, symbols)
         finally:
             settings.data_dir = real_data_dir
@@ -159,10 +264,14 @@ def main() -> int:
     parser.add_argument("--bars", type=int, default=3000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--broad", action="store_true", help="wider candidate set (slower)")
+    parser.add_argument(
+        "--alpha", action="store_true",
+        help="run the Faz 11 alpha primitives over noise (incl. OI/funding/liquidations)",
+    )
     args = parser.parse_args()
 
     symbols = args.symbols or [args.symbol, "NOISE2USDT", "NOISE3USDT"]
-    return run_noise_scan(symbols, args.tf, args.bars, args.seed, args.broad)
+    return run_noise_scan(symbols, args.tf, args.bars, args.seed, args.broad, alpha=args.alpha)
 
 
 if __name__ == "__main__":

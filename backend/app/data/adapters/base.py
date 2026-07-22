@@ -30,13 +30,27 @@ class MarketDataAdapter(ABC):
     async def fetch_ohlcv(
         self, ccxt_symbol: str, tf: str, since_ms: int, limit: int
     ) -> list[list[float]]:
-        """OHLCV rows ``[ts, open, high, low, close, volume]`` from ``since_ms``."""
+        """OHLCV rows from ``since_ms``.
+
+        Each row is ``[ts, open, high, low, close, volume]`` and MAY carry two
+        extra trailing fields ``taker_buy_base_volume, number_of_trades`` (Faz 11
+        §25.2) when the venue exposes them; the Parquet store treats those as
+        optional columns, so a plain 6-wide row is always valid.
+        """
 
     @abstractmethod
     async def fetch_funding_history(
         self, ccxt_symbol: str, since_ms: int, limit: int
     ) -> list[dict]:
         """Funding-rate history entries from ``since_ms``."""
+
+    async def fetch_open_interest(self, ccxt_symbol: str) -> dict:  # noqa: B027
+        """Current open interest ``{timestamp, openInterestAmount, openInterestValue}``.
+
+        Optional: OI cannot be backfilled (like liquidations) so it is polled
+        forward (doc §25.3). Adapters without an OI endpoint may leave this unset.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def fetch_tickers(self) -> dict[str, dict]:
