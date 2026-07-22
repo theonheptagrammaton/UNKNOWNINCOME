@@ -11,10 +11,11 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.config import RunConfig, config_hash
-from app.backtest.engine import BacktestResult, run_engine
+from app.backtest.engine import BacktestResult, _atr, run_engine
 from app.backtest.metrics import compute_metrics
 from app.backtest.rules import assert_operands_resolve, build_signals, resolve_operands
 from app.data.duckdb_query import query_funding, query_ohlcv
+from app.execution.slippage_model import LearnedSlippageModel, load_model
 from app.indicators.compute import compute_indicator
 
 
@@ -212,6 +213,45 @@ def build_report(
     return _sanitize(report)  # type: ignore[return-value]
 
 
+def _representative_notional(config: RunConfig) -> float:
+    """A coarse per-order quote notional for the learned-slippage notional tier.
+
+    The notional tier is log-scaled (§26.1), so a representative order size is enough:
+    fixed sizing deploys ``size_pct × leverage`` of equity as notional; ATR sizing is
+    bounded by the margin cap (``equity × leverage``). Either way the *volatility* tier
+    (per-bar ATR, the dominant slippage driver) is exact; only the size tier is coarse.
+    """
+    cap = config.capital
+    factor = cap.size_pct if cap.sizing == "fixed" else 1.0
+    return cap.initial_cash * max(cap.leverage, 1.0) * factor
+
+
+def learned_slippage_series(
+    config: RunConfig, ohlcv: pd.DataFrame, model: LearnedSlippageModel | None = None
+) -> np.ndarray | None:
+    """Per-bar learned slippage in bps (doc §26.1), or ``None`` if no model is built.
+
+    Trusted buckets carry the measured slippage; untrusted bars fall back to the fixed
+    ``slippage_bps`` assumption so the series is always fully defined.
+    """
+    model = model or load_model()
+    if model is None:
+        return None
+    n = len(ohlcv)
+    high = ohlcv["high"].to_numpy("float64")
+    low = ohlcv["low"].to_numpy("float64")
+    close = ohlcv["close"].to_numpy("float64")
+    atr = _atr(high, low, close, config.costs.atr_length)
+    notional = _representative_notional(config)
+    fallback = config.costs.slippage_bps
+    out = np.empty(n, dtype="float64")
+    for i in range(n):
+        a = atr[i] if not np.isnan(atr[i]) else 0.0
+        bps = model.lookup_bps(config.symbol, config.tf, notional, a, close[i])
+        out[i] = bps if bps is not None else fallback
+    return out
+
+
 def run_backtest(config: RunConfig) -> dict:
     """Run one backtest end to end; returns ``{metrics, report}`` (no persistence)."""
     ohlcv = query_ohlcv(
@@ -233,8 +273,14 @@ def run_backtest(config: RunConfig) -> dict:
             config.market, config.symbol, config.start_ts, config.end_ts
         )
 
+    slippage_series = (
+        learned_slippage_series(config, ohlcv)
+        if config.costs.slippage_model == "learned"
+        else None
+    )
     result = run_engine(
-        ohlcv, signals, config.costs, config.capital, funding, config.risk_exit
+        ohlcv, signals, config.costs, config.capital, funding, config.risk_exit,
+        slippage_bps_series=slippage_series,
     )
     metrics = compute_metrics(result, config.tf)
     report = build_report(config, ohlcv, result, frames)

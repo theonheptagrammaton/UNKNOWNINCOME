@@ -275,6 +275,35 @@ async def scheduled_reopt(ctx: dict[str, Any]) -> None:
         logger.warning("scheduled_reopt failed: %s", exc)
 
 
+async def reconcile_slippage_job(ctx: dict[str, Any]) -> None:
+    """Cron: rebuild the learned slippage model from live fills (doc §26.1).
+
+    Folds every real (``mode == "live"``) fill into the bucketed model and materialises
+    the sync-readable artifact the next backtest reads. If a trusted bucket is worse than
+    the fixed assumption, emits ``slippage_worse`` risk_events and notifies — the operator
+    then re-runs the affected backtests (an operator step; the trigger is automated).
+    """
+    from app.bot.notifier import default_notifier
+    from app.core.db import SessionLocal
+    from app.execution.slippage_reconcile import reconcile_slippage
+
+    try:
+        async with SessionLocal() as session:
+            report = await reconcile_slippage(
+                session,
+                tolerance_bps=settings.slippage_reconcile_tolerance_bps,
+                min_samples=settings.slippage_learn_min_samples,
+                notifier=default_notifier(),
+            )
+            await session.commit()
+        logger.info(
+            "slippage reconcile: %d obs, %d trusted bucket(s), rerun_needed=%s",
+            report.observations, report.trusted_buckets, report.rerun_needed,
+        )
+    except Exception as exc:  # pragma: no cover - cron resilience
+        logger.warning("reconcile_slippage_job failed: %s", exc)
+
+
 async def incremental_sync(ctx: dict[str, Any]) -> None:
     """Cron: pull newly closed bars for the active universe (best-effort)."""
     from app.core.db import SessionLocal
@@ -338,4 +367,6 @@ class WorkerSettings:
         cron(refresh_universe, weekday="mon", hour=0, minute=5),
         # Weekly WFO re-optimization (doc §8.3 v1). Sunday 03:00 UTC, off-peak.
         cron(scheduled_reopt, weekday="sun", hour=3, minute=0),
+        # Daily learned-slippage rebuild + worse-than-assumed check (doc §26.1). 04:00 UTC.
+        cron(reconcile_slippage_job, hour=4, minute=0),
     ]

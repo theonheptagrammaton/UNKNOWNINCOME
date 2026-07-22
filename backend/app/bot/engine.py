@@ -41,9 +41,10 @@ from app.core.settings_store import KEY_REGIME_LOCK, get_setting
 from app.data.duckdb_query import query_funding, query_ohlcv
 from app.execution.paper import PaperAdapter
 from app.execution.risk import RiskLayer, RiskLimits, TradeIntent
+from app.execution.slippage_model import adverse_slippage_bps
 from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
-from app.models.trading import EquitySnapshot, Order, Signal, Trade
+from app.models.trading import EquitySnapshot, Order, Signal, SlippageObservation, Trade
 from app.portfolio.limits import PortfolioLimits
 from app.portfolio.netting import Leg, attribute_pnl
 from app.strategy.genome import genome_config
@@ -417,6 +418,7 @@ class BotEngine:
 
         report.signals += 1
         atr = self._atr_at(ohlcv, config)
+        bar_volume = float(ohlcv["volume"].iloc[-1]) if "volume" in ohlcv else None
         intent = TradeIntent(
             strategy_version_id=version.id,
             symbol=config.symbol,
@@ -429,6 +431,8 @@ class BotEngine:
             # Market order fills at the current price, so the reference *is* the last
             # price → the deviation guard only trips on a genuinely stale reference.
             last_price=close,
+            # Signal-bar base volume for the capacity/participation gate (doc §26.2).
+            bar_volume=bar_volume,
             commission_bps=config.costs.commission_bps,
             slippage_bps=(
                 config.costs.slippage_bps if config.costs.slippage_model == "fixed_bps" else None
@@ -485,6 +489,7 @@ class BotEngine:
             symbol=config.symbol, side=intent.side, qty=fill.qty, price=fill.price,
             status="filled", detail={"commission": fill.commission, "slippage": fill.slippage_cost},
         ))
+        self._record_slippage(session, version, config, intent, fill, mode)
         await self._apply_fill(
             session, strat, version, config, action, intent, fill, open_trade, mode, risk
         )
@@ -670,6 +675,32 @@ class BotEngine:
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+    def _record_slippage(
+        self,
+        session: AsyncSession,
+        version: StrategyVersion,
+        config: RunConfig,
+        intent: TradeIntent,
+        fill: object,
+        mode: str,
+    ) -> None:
+        """Record expected-vs-realized fill price for the learned model (doc §26.1).
+
+        Every fill is logged; only ``mode == "live"`` rows teach the model when it is
+        rebuilt (a paper fill is simulated — feeding it back would teach the model its
+        own guess, rule #13). Paper rows are still stored so the operator can inspect them.
+        """
+        expected = intent.reference_price
+        if expected is None or expected <= 0 or fill.price <= 0:
+            return
+        session.add(SlippageObservation(
+            ts=intent.ts, mode=mode, symbol=config.symbol, tf=config.tf, side=intent.side,
+            expected_price=expected, fill_price=fill.price,
+            order_notional=fill.qty * fill.price, atr=intent.atr or 0.0,
+            slippage_bps=adverse_slippage_bps(expected, fill.price, intent.side),
+            strategy_version_id=version.id,
+        ))
 
     def _atr_at(self, ohlcv: pd.DataFrame, config: RunConfig) -> float | None:
         length = config.risk_exit.atr_length or config.costs.atr_length

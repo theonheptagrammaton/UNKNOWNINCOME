@@ -114,3 +114,30 @@ class EquitySnapshot(Base):
     equity: Mapped[float] = mapped_column(Float)
     exposure: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class SlippageObservation(Base):
+    """One real fill's expected-vs-realized price (doc §26.1 — learned slippage).
+
+    Written after every fill; only ``mode == "live"`` rows teach the learned model
+    (a paper fill is simulated — feeding it back would teach the model its own guess,
+    rule #13). ``slippage_bps`` is the signed *adverse* slippage (positive = worse than
+    expected). Bucketed by ``(symbol, tf, order-notional tier, volatility tier)`` when
+    aggregated; the raw row keeps the numbers so buckets can be re-derived.
+    """
+
+    __tablename__ = "slippage_observations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ts: Mapped[int] = mapped_column(BigInteger, index=True)  # ms UTC
+    mode: Mapped[str] = mapped_column(String(8), index=True)  # paper | live
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    tf: Mapped[str] = mapped_column(String(8), index=True)
+    side: Mapped[str] = mapped_column(String(4))  # buy | sell
+    expected_price: Mapped[float] = mapped_column(Float)  # reference the order sent at
+    fill_price: Mapped[float] = mapped_column(Float)  # realized fill
+    order_notional: Mapped[float] = mapped_column(Float)  # |qty| × fill_price
+    atr: Mapped[float] = mapped_column(Float, default=0.0)  # ATR at the signal bar
+    slippage_bps: Mapped[float] = mapped_column(Float)  # signed adverse bps
+    strategy_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

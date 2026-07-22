@@ -143,5 +143,17 @@ class Settings(BaseSettings):
     portfolio_gross_leverage_cap: float = 3.0  # total notional / equity
     portfolio_direction_concentration_pct: float = 60.0  # net long|short ≤ this
 
+    # ── Execution quality & capacity (doc §26, Faz 12) ───────────────────────
+    # Learned slippage (§26.1): a bucket is trusted once it holds this many real fills;
+    # below it the backtest keeps the fixed-bps assumption.
+    slippage_learn_min_samples: int = 50
+    # How much worse-than-assumed (bps) a trusted bucket may be before the reconciler
+    # re-runs affected backtests. 0 = re-run on any regression (doc §26.1).
+    slippage_reconcile_tolerance_bps: float = 0.0
+    # Limit-entry path (§26.3) — opt-in, OFF by default; carries a separate report tag.
+    limit_entry_enabled: bool = False
+    limit_timeout_s: float = 5.0  # seconds a limit rests before the market fallback
+    maker_fee_bps: float = 2.0  # maker fee for a filled limit (vs 4 bps taker)
+
 
 settings = Settings()

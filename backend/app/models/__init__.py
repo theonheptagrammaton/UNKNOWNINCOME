@@ -16,7 +16,13 @@ from app.models.research import ExperimentTrial
 from app.models.risk import RiskEvent
 from app.models.strategy import Strategy, StrategyVersion
 from app.models.system import AuditLog, Setting
-from app.models.trading import EquitySnapshot, Order, Signal, Trade
+from app.models.trading import (
+    EquitySnapshot,
+    Order,
+    Signal,
+    SlippageObservation,
+    Trade,
+)
 
 __all__ = [
     "AuditLog",
@@ -32,6 +38,7 @@ __all__ = [
     "RiskEvent",
     "Setting",
     "Signal",
+    "SlippageObservation",
     "Strategy",
     "StrategyVersion",
     "Symbol",

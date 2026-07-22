@@ -31,7 +31,9 @@ def make_wave_ohlcv(
         o = c + float(rng.standard_normal()) * 0.2
         h = max(o, c) + abs(float(rng.standard_normal()))
         low = min(o, c) - abs(float(rng.standard_normal()))
-        v = float(rng.random()) * 1000 + 100
+        # Ample base volume (like a real liquid pair) so a normal order stays well under
+        # the §26.2 participation cap — these plumbing fixtures exercise fills, not capacity.
+        v = float(rng.random()) * 100_000 + 50_000
         bars.append([i * step, o, h, low, c, v])
     return bars
 

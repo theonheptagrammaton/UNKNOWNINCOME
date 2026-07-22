@@ -123,8 +123,15 @@ def run_engine(
     capital: CapitalConfig,
     funding: pd.DataFrame | None = None,
     risk_exit: RiskExitConfig | None = None,
+    slippage_bps_series: np.ndarray | None = None,
 ) -> BacktestResult:
-    """Simulate positions → equity → trades with the full §6.2 cost model."""
+    """Simulate positions → equity → trades with the full §6.2 cost model.
+
+    ``slippage_bps_series`` (doc §26.1) is a per-bar learned slippage in bps, supplied by
+    the runner when ``costs.slippage_model == "learned"``: trusted buckets carry the
+    measured slippage, untrusted bars fall back to ``costs.slippage_bps``. When it is
+    ``None`` the engine keeps the fixed/ATR assumption.
+    """
     n = len(ohlcv)
     ts = ohlcv["ts"].to_numpy(dtype="int64")
     open_ = ohlcv["open"].to_numpy(dtype="float64")
@@ -139,6 +146,12 @@ def run_engine(
 
     comm_rate = costs.commission_bps / 1e4
     slip_bps = costs.slippage_bps / 1e4
+    maker_rate = costs.maker_fee_bps / 1e4
+    limit_on = costs.limit_entry_enabled
+    learned_on = costs.slippage_model == "learned" and slippage_bps_series is not None
+    learned_series = (
+        np.asarray(slippage_bps_series, dtype="float64") if learned_on else np.zeros(n)
+    )
     atr = (
         _atr(high, low, close, costs.atr_length)
         if costs.slippage_model == "atr"
@@ -183,10 +196,18 @@ def run_engine(
     tot_commission = 0.0
     tot_funding = 0.0
     tot_slippage = 0.0
+    # Maker/taker split for the limit-entry path (doc §26.3) — reported separately.
+    tot_maker_commission = 0.0
+    tot_taker_commission = 0.0
+    n_maker_entries = 0
+    n_taker_entries = 0
 
     def fill_price(ref_open: float, is_buy: bool, s: int) -> tuple[float, float]:
         """Adverse fill + its slippage magnitude (absolute price move)."""
-        if costs.slippage_model == "atr":
+        if learned_on:
+            bps = learned_series[s] if not np.isnan(learned_series[s]) else costs.slippage_bps
+            d = ref_open * (bps / 1e4)
+        elif costs.slippage_model == "atr":
             d = costs.atr_mult * (atr[s] if not np.isnan(atr[s]) else 0.0)
         else:
             d = ref_open * slip_bps
@@ -244,12 +265,26 @@ def run_engine(
     def open_position(side: int, entry_ref: float, i: int, s: int) -> None:
         nonlocal cash, pos, qty, entry_fill, entry_ts, entry_index
         nonlocal entry_commission, entry_slip, trade_funding, tot_commission, tot_slippage
+        nonlocal tot_maker_commission, tot_taker_commission, n_maker_entries, n_taker_entries
         nonlocal stop_level, target_level, liq_level
         avail = cash  # flat ⇒ equity == cash
         if avail <= 0:
             return
         is_buy = side > 0
-        fill, slip = fill_price(entry_ref, is_buy, s)
+        # Limit-entry path (doc §26.3, opt-in): post a maker limit at the signal-bar close.
+        # If the fill bar's range reaches it → maker fill at the limit (no slippage, maker
+        # fee); otherwise price gapped away → market (taker) fallback at the fill-bar open,
+        # the adverse-selection case the bias warning is about. Lookahead-safe: uses only
+        # the fill bar's OHLC, exactly like a market fill uses its open.
+        maker = False
+        if limit_on:
+            limit_px = close[s]
+            if low[i] <= limit_px <= high[i]:
+                fill, slip, maker = limit_px, 0.0, True
+            else:
+                fill, slip = fill_price(entry_ref, is_buy, s)
+        else:
+            fill, slip = fill_price(entry_ref, is_buy, s)
         if fill <= 0:
             return
         # Stop distance from the ATR known at the entry *signal* bar s — the sizing
@@ -271,7 +306,8 @@ def run_engine(
         if q <= 0:
             return  # ATR sizing with no stop yet (warm-up) ⇒ skip, never oversize
         qty = q
-        entry_commission = comm_rate * qty * fill
+        entry_rate = maker_rate if maker else comm_rate
+        entry_commission = entry_rate * qty * fill
         cash -= entry_commission
         pos = side
         entry_fill = fill
@@ -281,6 +317,13 @@ def run_engine(
         trade_funding = 0.0
         tot_commission += entry_commission
         tot_slippage += slip
+        if limit_on:
+            if maker:
+                tot_maker_commission += entry_commission
+                n_maker_entries += 1
+            else:
+                tot_taker_commission += entry_commission
+                n_taker_entries += 1
         # Stop band (from the same stop distance that sized the trade) + target + liq.
         stop_level = fill - side * stop_dist if stop_dist is not None else np.nan
         target_level = np.nan
@@ -337,9 +380,12 @@ def run_engine(
     if pos != 0 and n > 0:
         close_position(close[n - 1], n - 1, n - 1, forced=True)
 
-    slip_on = (costs.slippage_bps > 0) if costs.slippage_model == "fixed_bps" else (
-        costs.atr_mult > 0
-    )
+    if costs.slippage_model == "atr":
+        slip_on = costs.atr_mult > 0
+    elif learned_on:
+        slip_on = True  # learned per-bar bps (falls back to slippage_bps for cold buckets)
+    else:
+        slip_on = costs.slippage_bps > 0
     cost_breakdown = {
         "total_commission": float(tot_commission),
         "total_funding": float(tot_funding),
@@ -348,7 +394,16 @@ def run_engine(
         "slippage_on": bool(slip_on),
         "funding_on": bool(costs.funding_enabled and _funding_present(funding)),
         "costless": not (costs.commission_bps > 0 or slip_on),
+        # doc §26.1 — which slippage model actually priced the fills (rule #14 honesty).
+        "slippage_source": "learned" if learned_on else costs.slippage_model,
     }
+    if limit_on:
+        # doc §26.3 — maker/taker as a separate line item + the opt-in report tag.
+        cost_breakdown["limit_entry"] = True
+        cost_breakdown["maker_commission"] = float(tot_maker_commission)
+        cost_breakdown["taker_commission"] = float(tot_taker_commission)
+        cost_breakdown["maker_entries"] = int(n_maker_entries)
+        cost_breakdown["taker_entries"] = int(n_taker_entries)
     return BacktestResult(
         ts=[int(t) for t in ts],
         equity=[float(e) for e in equity],

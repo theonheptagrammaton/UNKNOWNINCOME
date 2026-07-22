@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from app.core.clock import Clock, now_ms
 from app.execution.base import Balance, OrderRequest, OrderResult, Position
+from app.execution.capacity import exceeds_cap, participation
 from app.execution.sizing import position_size
 from app.portfolio.limits import (
     AddedLeg,
@@ -53,6 +54,7 @@ class RiskLimits(BaseModel):
     liq_buffer_atr_mult: float = 3.0  # liq price must be ≥ this×ATR from entry
     maintenance_margin_rate: float = 0.005  # ≈ Binance USDT-M for the liq estimate
     default_stop_atr_mult: float = 2.0  # stop distance when the genome gives none
+    participation_cap_pct: float = 1.0  # reject if order > this % of bar volume (§26.2)
 
 
 @dataclass
@@ -68,6 +70,7 @@ class TradeIntent:
     stop_distance: float | None = None  # explicit stop distance (overrides ATR mult)
     leverage: float = 5.0
     last_price: float | None = None  # for the price-deviation guard
+    bar_volume: float | None = None  # signal bar base volume (for the capacity gate §26.2)
     signal_id: str | None = None
     commission_bps: float | None = None  # per-genome cost overrides (paper sim)
     slippage_bps: float | None = None
@@ -269,6 +272,19 @@ class RiskLayer:
         if qty <= 0:
             events.append(_ev("insufficient_equity", intent, {"equity": equity, "qty": qty}))
             return RiskDecision(False, reason="insufficient equity / zero size", events=events)
+
+        # Capacity / participation cap (doc §26.2) — an order over `cap`% of the signal
+        # bar's volume pushes its own price, which the backtest doesn't model. Reject it.
+        cap = self.limits.participation_cap_pct
+        if exceeds_cap(qty, intent.bar_volume or 0.0, cap):
+            part = participation(qty, intent.bar_volume or 0.0)
+            events.append(_ev("capacity", intent, {
+                "participation_pct": round((part or 0.0) * 100, 4),
+                "cap_pct": cap,
+                "order_qty": qty,
+                "bar_volume": intent.bar_volume,
+            }))
+            return RiskDecision(False, reason="participation over capacity cap", events=events)
 
         return RiskDecision(True, qty=qty, leverage=leverage, events=events)
 

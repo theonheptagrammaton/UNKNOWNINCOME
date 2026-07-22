@@ -101,6 +101,50 @@ def compute_tracking_error(
     )
 
 
+@dataclass
+class TrackingComparison:
+    """Tracking error before vs after the learned slippage model went live (doc §26.4).
+
+    The acceptance criterion is that the learned model *narrows* the live-vs-paper gap:
+    ``narrowed`` is True when the after-window tracking error is below the before-window
+    one. ``None`` when either window has too few points to score.
+    """
+
+    split_ts: int
+    before: TrackingError
+    after: TrackingError
+    narrowed: bool | None
+
+    def as_dict(self) -> dict:
+        return {
+            "split_ts": self.split_ts,
+            "before": self.before.as_dict(),
+            "after": self.after.as_dict(),
+            "narrowed": self.narrowed,
+        }
+
+
+def compare_tracking_error(
+    live: list[tuple[int, float]], paper: list[tuple[int, float]], split_ts: int
+) -> TrackingComparison:
+    """Split both series at ``split_ts`` and score tracking error on each side.
+
+    ``split_ts`` is the moment the learned slippage model was activated (materialised
+    with ≥1 trusted bucket). Snapshots strictly before it form the "assumed" window;
+    those at/after it form the "learned" window.
+    """
+    before = compute_tracking_error(
+        [x for x in live if x[0] < split_ts], [x for x in paper if x[0] < split_ts]
+    )
+    after = compute_tracking_error(
+        [x for x in live if x[0] >= split_ts], [x for x in paper if x[0] >= split_ts]
+    )
+    narrowed: bool | None = None
+    if before.tracking_error is not None and after.tracking_error is not None:
+        narrowed = after.tracking_error < before.tracking_error
+    return TrackingComparison(split_ts=split_ts, before=before, after=after, narrowed=narrowed)
+
+
 async def _series(session: AsyncSession, mode: str, limit: int) -> list[tuple[int, float]]:
     rows = (
         await session.execute(
@@ -118,3 +162,12 @@ async def load_tracking_error(session: AsyncSession, limit: int = 1000) -> Track
     live = await _series(session, "live", limit)
     paper = await _series(session, "paper", limit)
     return compute_tracking_error(live, paper)
+
+
+async def load_tracking_comparison(
+    session: AsyncSession, split_ts: int, limit: int = 2000
+) -> TrackingComparison:
+    """Before/after tracking-error comparison around the learned-model activation ts."""
+    live = await _series(session, "live", limit)
+    paper = await _series(session, "paper", limit)
+    return compare_tracking_error(live, paper, split_ts)

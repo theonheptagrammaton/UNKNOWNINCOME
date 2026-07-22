@@ -13,10 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
+from app.data.duckdb_query import query_ohlcv
+from app.execution.capacity import capacity_from_samples
 from app.models.strategy import Strategy, StrategyVersion
-from app.models.trading import Trade
+from app.models.trading import EquitySnapshot, Trade
 from app.strategy import service
-from app.strategy.genome import GenomeError, diff_genomes
+from app.strategy.genome import GenomeError, diff_genomes, genome_config
 from app.strategy.plugin_loader import load_plugins
 from app.strategy.plugin_registry import get_plugin_registry
 
@@ -50,6 +52,7 @@ class StrategyOut(BaseModel):
     created_from_run_id: str | None
     created_at: str | None
     health: dict
+    capacity_usd: float | None = None  # "carries up to $X" (doc §26.2)
 
 
 class VersionOut(BaseModel):
@@ -104,6 +107,54 @@ async def _health(session: AsyncSession, strategy_id: str) -> dict:
     }
 
 
+async def _capacity(
+    session: AsyncSession, strategy_id: str, version: StrategyVersion | None
+) -> float | None:
+    """"Carries up to $X" (doc §26.2): equity × 1% / median order participation.
+
+    Best-effort — the strategy's recent fills give ``(order_qty, bar_volume)`` pairs
+    (bar volume read from OHLCV at each entry bar); the median participation projects how
+    much capital the strategy could carry before an order would breach the 1% cap. Returns
+    ``None`` until there are real fills with real volume (an operator step, like the other
+    real-data numbers in this phase). Never raises — the card degrades to no estimate.
+    """
+    if version is None:
+        return None
+    try:
+        config = genome_config(version.genome)
+    except Exception:
+        return None
+    last_eq = (
+        await session.execute(
+            select(EquitySnapshot).where(EquitySnapshot.mode == "paper")
+            .order_by(EquitySnapshot.ts.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    if last_eq is None or last_eq.equity <= 0:
+        return None
+    trades = (
+        await session.execute(
+            select(Trade).where(Trade.strategy_id == strategy_id, Trade.mode == "paper")
+            .order_by(Trade.entry_ts.desc()).limit(20)
+        )
+    ).scalars().all()
+    if not trades:
+        return None
+    try:
+        ohlcv = query_ohlcv(config.market, config.symbol, config.tf)
+        vol_by_ts = dict(zip(ohlcv["ts"].tolist(), ohlcv["volume"].tolist(), strict=False))
+    except Exception:
+        return None
+    samples = [
+        (t.qty, vol_by_ts[t.entry_ts])
+        for t in trades
+        if t.symbol == config.symbol and t.entry_ts in vol_by_ts
+    ]
+    if not samples:
+        return None
+    return capacity_from_samples(last_eq.equity, samples)
+
+
 async def _strategy_out(session: AsyncSession, strat: Strategy) -> StrategyOut:
     version = (
         await session.get(StrategyVersion, strat.active_version_id)
@@ -120,6 +171,7 @@ async def _strategy_out(session: AsyncSession, strat: Strategy) -> StrategyOut:
         created_from_run_id=strat.created_from_run_id,
         created_at=strat.created_at.isoformat() if strat.created_at else None,
         health=await _health(session, strat.id),
+        capacity_usd=await _capacity(session, strat.id, version),
     )
 
 

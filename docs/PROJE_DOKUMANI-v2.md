@@ -575,6 +575,17 @@ Dört kuşağa ayrılmıştır. **Birinci kuşağa dokunmak için sebep gerekir.
 | `open_interest_collector_enabled` (kapalı) | Açık pozisyon (OI) 5 dk REST toplayıcısını worker'da başlatır | Açarsan bugünden OI birikir (**~30 günden eski geriye indirilemez**, erken aç); `oi_divergence` beslenir | Kapalıysa OI toplanmaz; o boşluk sonradan doldurulamaz |
 | `open_interest_poll_seconds` (300) | OI ne sıklıkta çekilir (5 dk ızgara) | Daha seyrek çekim, daha az istek, daha kaba OI izi | Daha sık çekim, daha çok REST trafiği, ızgaradan sapma riski |
 
+#### Kuşak 7 — Yürütme kalitesi ve kapasite (Faz 12)
+
+| Ayar | Ne yapar | Yükseltirsen | Düşürürsen |
+|---|---|---|---|
+| `participation_cap_pct` (%1) | Emrin sinyal barı hacmine oranı tavanı; aşan emir reddedilir + `risk_event(capacity)` (§26.2) | Daha büyük emir geçer ama kendi fiyatını itersin; backtest bunu modellemez, canlıda kötü dolarsın | Daha küçük emir; kapasite tahmini düşer, slippage gerçeğe yakın kalır |
+| `slippage_learn_min_samples` (50) | Bir kovanın öğrenilmiş modele güvenilmesi için gereken gerçek dolum sayısı (§26.1) | Daha çok kanıt beklenir; model geç devreye girer, daha güvenilir | Daha az dolumla güvenilir sayılır; erken ama gürültülü tahmin |
+| `slippage_reconcile_tolerance_bps` (0) | Öğrenilmiş kovanın varsayımdan ne kadar (bps) kötü olması yeniden-koşuyu tetikler (§26.1) | Küçük regresyonlar görmezden gelinir; leaderboard geç güncellenir | Sıfırda her kötüleşme yeniden koşulur; en dürüst ama en pahalı |
+| `limit_entry_enabled` (kapalı) | Girişte maker limit emir; `T` sn dolmazsa market'e düşer (§26.3) | Maker komisyonu kazanılır **ama** dolmayan limitler genelde fiyat aleyhine gittiğinde olur — backtest'te modellenmesi zor yanlılık | Kapalı = her giriş taker market; en basit, yanlılıksız varsayılan |
+| `limit_timeout_s` (5) | Limit emrin market'e düşmeden önce dinlenme süresi | Daha uzun bekleyiş, daha çok maker dolum, daha çok kaçan giriş | Daha hızlı market fallback, daha az maker avantajı |
+| `maker_fee_bps` (2) | Dolan limitin maker komisyonu (taker 4 bps'e karşı) | Maker avantajı azalır | Maker avantajı artar; borsanın gerçek maker ücretiyle eşleştir |
+
 ### 28.3 Karar anlatıcısı
 
 `reason` alanı bugün JSON. UI ve Telegram için düz cümleye çevrilir:

@@ -24,7 +24,7 @@ class OrderRequest:
     side: str  # "buy" | "sell"
     qty: float  # base-asset quantity (> 0); leverage is already baked into sizing
     reduce_only: bool = False
-    order_type: str = "market"
+    order_type: str = "market"  # "market" | "limit" (limit entry path, §26.3)
     # Reference price for the fill simulator (paper) — the current bar/tick price.
     reference_price: float | None = None
     leverage: float = 1.0
@@ -32,6 +32,10 @@ class OrderRequest:
     # Per-genome cost overrides for the paper fill sim (fall back to adapter defaults).
     commission_bps: float | None = None
     slippage_bps: float | None = None
+    # Limit-entry path (doc §26.3, default OFF/opt-in): rest at ``limit_price`` and fall
+    # back to a market order after ``timeout_s`` seconds if it hasn't filled.
+    limit_price: float | None = None
+    timeout_s: float | None = None
 
 
 @dataclass

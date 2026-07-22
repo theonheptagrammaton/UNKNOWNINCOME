@@ -270,6 +270,11 @@ function StrategyCard({
             <span>rolling PF: {fmtNum(h.rolling_pf, 2)}</span>
             <span>last pnl: {fmtNum(h.last_pnl, 2)}</span>
             <span>open: {h.open_positions}</span>
+            {strategy.capacity_usd != null && (
+              <span title="Max capital before an order would exceed 1% of bar volume (doc §26.2)">
+                carries up to ${fmtNum(strategy.capacity_usd, 0)}
+              </span>
+            )}
           </div>
         </div>
         <ModeSwitch

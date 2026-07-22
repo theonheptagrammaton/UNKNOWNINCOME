@@ -18,7 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Direction = Literal["long", "short", "both"]
-SlippageModel = Literal["fixed_bps", "atr"]
+SlippageModel = Literal["fixed_bps", "atr", "learned"]
 Sizing = Literal["atr", "fixed"]
 
 
@@ -65,10 +65,15 @@ class CostConfig(BaseModel):
 
     commission_bps: float = 4.0  # Binance USDT-M taker ≈ 0.04% per side
     slippage_model: SlippageModel = "fixed_bps"
-    slippage_bps: float = 5.0  # fixed 5 bps
+    slippage_bps: float = 5.0  # fixed 5 bps (also the fallback for untrusted learned buckets)
     atr_mult: float = 0.05  # 0.05 × ATR (when slippage_model == "atr")
     atr_length: int = 14
     funding_enabled: bool = True  # 8h historical perpetual funding
+    # Limit-entry path (doc §26.3) — opt-in, OFF by default, separately reported. A maker
+    # limit is posted at the signal-bar close; if the fill bar's range doesn't reach it,
+    # a market (taker) order fills at the fill-bar open (the adverse-selection case).
+    limit_entry_enabled: bool = False
+    maker_fee_bps: float = 2.0  # Binance USDT-M maker ≈ 0.02%/side (vs 0.04% taker)
 
 
 class CapitalConfig(BaseModel):

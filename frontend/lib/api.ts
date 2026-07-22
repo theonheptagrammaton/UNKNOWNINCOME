@@ -497,6 +497,7 @@ export interface StrategyOut {
   created_from_run_id: string | null;
   created_at: string | null;
   health: StrategyHealth;
+  capacity_usd: number | null; // "carries up to $X" (doc §26.2)
 }
 
 export interface StrategyVersion {

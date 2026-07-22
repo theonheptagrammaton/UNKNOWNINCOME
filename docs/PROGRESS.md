@@ -165,14 +165,14 @@ Kapsam ve kabul kriterleri: `docs/PROJE_DOKUMANI-v2.md` §22–§27. Sıra pazar
 - **Durum:** `[x]` Kod + testler tamam. **336 test geçiyor** (+33 yeni Faz-11), ruff temiz. İki yeni ayar §28.2 Kuşak 6 sözlüğüne + `.env.example`'a eklendi (kural 19). Gerçek taker yeniden-indirme / canlı OI·funding·likidasyon sayıları operatör adımı (kural 13). Tag: `faz-11`. Rapor: `docs/RAPOR-faz11-alfa.md`.
 - **Durum:** `[ ]` Başlamadı.
 
-## Faz 12 — Yürütme Kalitesi ve Kapasite `[ ]`
-- [ ] **Kapsam (§26):** Slippage öğrenilir, varsayılmaz (`execution/slippage_model.py`, kova bazında `(sembol,TF,emir_dilimi,vol_dilimi)`, N≥50 dolumdan sonra backtest öğrenilmiş modeli kullanır; varsayımdan kötüyse geçmiş backtestler yeniden koşulur). Kapasite tahmini (`katilim_orani = emir/bar_hacmi`, tavan %1, her strateji kartında "≈ $X'e kadar taşır"). Limit emir desteği (giriş için, `T` sn timeout → market fallback; varsayılan **kapalı**, opt-in, raporda ayrı etiket).
+## Faz 12 — Yürütme Kalitesi ve Kapasite `[x]`
+- [x] **Kapsam (§26):** Slippage öğrenilir, varsayılmaz (`execution/slippage_model.py`, kova `(sembol,TF,emir_notional_dilimi,vol_dilimi)`, N≥50 dolumdan sonra backtest öğrenilmiş modeli kullanır — `slippage_model="learned"`; varsayımdan kötüyse `execution/slippage_reconcile.py` yeniden-koşuyu tetikler). Kapasite (`participation = emir/bar_hacmi`, tavan %1, risk geçidinde red + `capacity` risk_event, her strateji kartında "carries up to $X"). Limit emir yolu (`execution/limit.py`, `T` sn timeout → market fallback; varsayılan **kapalı**, opt-in, backtest'te maker/taker ayrı kalem + etiket).
 - **Kabul kriterleri (§26.4):**
-  - [ ] 50+ gerçek dolum sonrası öğrenilmiş slippage modeli devrede; sabit varsayımla farkı raporlanıyor.
-  - [ ] Her strateji kartında kapasite tahmini; katılım oranı %1'i aşan emir reddediliyor.
-  - [ ] Limit emir yolu testli; `T` saniye timeout sonrası market fallback çalışıyor.
-  - [ ] Canlı-paper tracking error, öğrenilmiş model devreye girdikten sonra **daraldı** (ölçüldü).
-- **Durum:** `[ ]` Başlamadı.
+  - [x] 50+ gerçek dolum sonrası öğrenilmiş slippage modeli devrede; sabit varsayımla farkı raporlanıyor — `test_slippage_model.py` (12 test: <50 fallback, 50'de güvenilir, learned≠fixed `total_slippage`, `slippage_source`). Gerçek 50+ **canlı** dolum operatör adımı.
+  - [x] Her strateji kartında kapasite tahmini; katılım oranı %1'i aşan emir reddediliyor — `test_capacity.py` (8 test: %2.5 red + `capacity` risk_event, submit yolunda emir adaptöre ulaşmıyor). `StrategyOut.capacity_usd` → UI "carries up to $X".
+  - [x] Limit emir yolu testli; `T` saniye timeout sonrası market fallback çalışıyor — `test_limit_order.py` (7 test: 5 sn sonra market fallback, maker anında dolum, backtest maker/taker split).
+  - [x] Canlı-paper tracking error, öğrenilmiş model devreye girdikten sonra **daraldı** (ölçüldü) — makine `bot/tracking.py::compare_tracking_error` + `test_tracking_window.py` (3 test). Gerçek daralma canlı-paper koşusu → operatör adımı (kural 13).
+- **Durum:** `[x]` Kod + testler tamam. **361 test geçiyor** (+25 yeni Faz-12), ruff temiz, frontend `tsc` temiz. 6 yeni ayar §28.2 Kuşak 7 sözlüğüne eklendi (kural 19). Günlük `reconcile_slippage_job` cron modeli tazeler. Gerçek 50+ canlı dolum / tracking-error daralması operatör adımı (kural 13). Tag: `faz-12`. Rapor: `docs/RAPOR-faz12-yurutme.md`.
 
 ## Faz 13 — Kendini Geliştirme v2 (portföy düzeyinde) `[ ]`
 - [ ] **Kapsam (§27):** Gelişme seviye değiştirir: parametreden portföye (genetik arama v2'de **reddedildi** — arama uzayını büyütmek istatistiksel bedeli büyütür). `StrategyGenerator` registry'sine üç üretici: `ScheduledRetirement` (zorunlu emeklilik, yarı ömür 90g), `AllocationLearner` (haftalık, tahsis değişimi ≤ %20), `HypothesisGenerator` (yapılandırılmış hipotez, opsiyonel araştırma rayı). Rejim artık filtre değil **tahsis girdisi** (rejim bazında geçmiş performans, yumuşatılmış geçiş, etiketsiz nötr).
